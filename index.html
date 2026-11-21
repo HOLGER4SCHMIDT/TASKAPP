@@ -1,1129 +1,108 @@
-<!DOCTYPE html>
-<html lang="de">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#0f172a">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Task & Termin Cockpit</title>
-    <!-- PWA Manifest & Touch Icon (dynamisch generiert) -->
-    <link id="pwa-manifest" rel="manifest" href="">
-    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='42' fill='%234f46e5'/%3E%3Cpath d='M56 98l26 26 54-56' fill='none' stroke='%23ffffff' stroke-width='18' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-    <!-- Tailwind CSS via CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Microsoft Authentication Library (MSAL.js v2) über jsDelivr CDN (mit Multi-CDN-Fallback im Skript) -->
-    <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js" crossorigin="anonymous"></script>
-    <!-- Google Font Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'sans-serif'],
-                    }
-                }
-            }
-        }
-    </script>
-    <style>
-        body {
-            font-family: 'Inter', sans-serif;
-            -webkit-tap-highlight-color: transparent;
-        }
-        .no-scrollbar::-webkit-scrollbar {
-            display: none;
-        }
-        .no-scrollbar {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-        }
-        @keyframes fadeInScale {
-            from { opacity: 0; transform: scale(0.97) translateY(6px); }
-            to { opacity: 1; transform: scale(1) translateY(0); }
-        }
-        .animate-modal {
-            animation: fadeInScale 0.18s ease-out forwards;
-        }
-        @media print {
-            header, #fab-add, #toast, .no-print { display: none !important; }
-            body { background: #fff !important; }
-            main { padding: 0 !important; max-width: 100% !important; }
-        }
-    </style>
-</head>
-<body class="bg-slate-100 text-slate-800 min-h-screen flex flex-col selection:bg-indigo-100 selection:text-indigo-900">
-
-    <!-- ==================== SPERRBILDSCHIRM (ZUGRIFFSSCHUTZ) ==================== -->
-    <div id="lock-screen" class="hidden fixed inset-0 z-[100] bg-slate-950/95 backdrop-blur-md flex items-center justify-center p-4">
-        <div class="bg-slate-900 border border-slate-700/80 rounded-3xl shadow-2xl w-full max-w-sm p-6 sm:p-7 text-center space-y-5 animate-modal">
-            <div class="w-14 h-14 mx-auto rounded-2xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
-                <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                </svg>
-            </div>
-            <div>
-                <h2 class="text-lg font-bold text-white">Task & Termin Cockpit</h2>
-                <p class="text-xs text-slate-400 mt-1">Bitte PIN oder Passwort eingeben, um deine Daten zu entsperren.</p>
-            </div>
-
-            <form onsubmit="handleUnlockApp(event)" class="space-y-3 text-left">
-                <div>
-                    <input type="password" id="lock-pin-input" autocomplete="current-password" required placeholder="PIN / Passwort eingeben..." class="w-full px-4 py-3 text-center text-base tracking-widest bg-slate-800 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                    <p id="lock-error-msg" class="hidden text-xs text-rose-400 text-center mt-2 font-medium">Falsche PIN oder falsches Passwort.</p>
-                </div>
-                <button type="submit" class="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-sm font-semibold shadow-lg shadow-indigo-600/20 transition">
-                    Entsperren
-                </button>
-            </form>
-
-            <div class="pt-2 border-t border-slate-800">
-                <button type="button" id="btn-emergency-reset" onclick="handleEmergencyReset()" class="text-[11px] text-slate-500 hover:text-rose-400 transition">
-                    PIN vergessen? Lokalen Speicher zurücksetzen
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ==================== HEADER ==================== -->
-    <header class="bg-slate-900 text-white sticky top-0 z-30 shadow-md">
-        <div class="max-w-5xl mx-auto px-3 sm:px-6 py-3 flex items-center justify-between gap-2">
-            <div class="flex items-center gap-2.5 min-w-0">
-                <div class="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shrink-0 shadow-inner">
-                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
-                    </svg>
-                </div>
-                <div class="min-w-0">
-                    <h1 class="text-base sm:text-lg font-bold tracking-tight truncate">Task & Termin Cockpit</h1>
-                    <button type="button" onclick="openDataModal()" class="flex items-center gap-1.5 text-[11px] text-slate-300 hover:text-white transition text-left max-w-full">
-                        <span id="sync-status-dot" class="inline-block w-2 h-2 rounded-full bg-amber-400 shrink-0"></span>
-                        <span id="sync-status-text" class="truncate">Lokal gespeichert · OneDrive nicht verbunden</span>
-                    </button>
-                </div>
-            </div>
-
-            <div class="flex items-center gap-2 shrink-0">
-                <!-- Schnell-Sperren Button (sichtbar wenn PIN aktiv) -->
-                <button id="header-lock-btn" onclick="lockApp()" title="App jetzt sperren" class="hidden items-center justify-center p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 transition">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                    </svg>
-                </button>
-
-                <!-- Manueller Schnell-Sync Button (sichtbar wenn mit OneDrive verbunden) -->
-                <button id="header-quick-sync-btn" onclick="syncWithOneDrive(true)" title="Jetzt mit OneDrive synchronisieren" class="hidden items-center justify-center p-2 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 transition">
-                    <svg id="header-sync-icon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                    </svg>
-                </button>
-
-                <!-- Sync / Daten Button -->
-                <button onclick="openDataModal()" class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 active:bg-slate-600 text-slate-200 text-xs sm:text-sm font-medium border border-slate-700 transition">
-                    <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-                    </svg>
-                    <span class="hidden sm:inline">Daten & OneDrive</span>
-                    <span class="sm:hidden">Sync</span>
-                </button>
-
-                <!-- Desktop Button Neuer Eintrag -->
-                <button onclick="openEntryModal()" class="hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-sm font-semibold shadow-sm transition">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
-                    </svg>
-                    <span>Neu</span>
-                </button>
-            </div>
-        </div>
-
-        <!-- Haupt-Navigation Tabs -->
-        <nav class="bg-slate-800/90 border-t border-slate-700/80">
-            <div class="max-w-5xl mx-auto px-2 sm:px-6 flex">
-                <button id="nav-tasks" onclick="switchMainTab('tasks')" class="flex-1 sm:flex-none px-3 sm:px-5 py-2.5 text-xs sm:text-sm font-semibold border-b-2 border-indigo-400 text-white flex items-center justify-center gap-1.5 transition">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16"/>
-                    </svg>
-                    <span>Aufgaben & Infos</span>
-                    <span id="badge-active-count" class="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-slate-700 text-slate-200">0</span>
-                </button>
-                <button id="nav-calendar" onclick="switchMainTab('calendar')" class="flex-1 sm:flex-none px-3 sm:px-5 py-2.5 text-xs sm:text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center justify-center gap-1.5 transition">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                    </svg>
-                    <span>Termine</span>
-                    <span id="badge-today-events" class="ml-1 px-1.5 py-0.5 text-[10px] rounded-full bg-amber-500/20 text-amber-300">0</span>
-                </button>
-                <button id="nav-projects" onclick="switchMainTab('projects')" class="flex-1 sm:flex-none px-3 sm:px-5 py-2.5 text-xs sm:text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center justify-center gap-1.5 transition">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                    </svg>
-                    <span>Projekte</span>
-                </button>
-            </div>
-        </nav>
-    </header>
-
-    <!-- ==================== MAIN CONTENT ==================== -->
-    <main class="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 py-4 pb-24">
-
-        <!-- ==================== VIEW 1: AUFGABEN & INFOS ==================== -->
-        <section id="view-tasks" class="space-y-4">
-            <!-- Filter-Card -->
-            <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-3 sm:p-4 space-y-3 no-print">
-                <!-- Typ-Filter Pills -->
-                <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
-                    <button onclick="setTypeFilter('ALL')" data-type-filter="ALL" class="type-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900 text-white shrink-0 transition">
-                        Alle
-                    </button>
-                    <button onclick="setTypeFilter('B')" data-type-filter="B" class="type-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-blue-50 shrink-0 transition flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full bg-blue-600"></span> B · Beruflich
-                    </button>
-                    <button onclick="setTypeFilter('P')" data-type-filter="P" class="type-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-emerald-50 shrink-0 transition flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full bg-emerald-600"></span> P · Privat
-                    </button>
-                    <button onclick="setTypeFilter('I')" data-type-filter="I" class="type-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-cyan-50 shrink-0 transition flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full bg-cyan-600"></span> I · Info
-                    </button>
-                    <button onclick="setTypeFilter('T')" data-type-filter="T" class="type-pill px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-amber-50 shrink-0 transition flex items-center gap-1.5">
-                        <span class="w-2 h-2 rounded-full bg-amber-600"></span> T · Termin
-                    </button>
-                </div>
-
-                <!-- Suche, Projekt, Prio, Unterstützung, Status & Sortierung -->
-                <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                    <div class="sm:col-span-4 relative">
-                        <svg class="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                        </svg>
-                        <input type="text" id="filter-search" oninput="renderEntries()" placeholder="Suchen (Titel, Person, Protokoll...)" class="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition">
-                    </div>
-
-                    <div class="sm:col-span-2">
-                        <select id="filter-project" onchange="renderEntries()" class="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition">
-                            <option value="ALL">Projekt: Alle</option>
-                        </select>
-                    </div>
-
-                    <div class="sm:col-span-2">
-                        <select id="filter-prio" onchange="renderEntries()" class="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition">
-                            <option value="ALL">Prio: Alle</option>
-                            <option value="A">Prio A</option>
-                            <option value="B">Prio B</option>
-                            <option value="C">Prio C</option>
-                            <option value="Z">Prio Z</option>
-                        </select>
-                    </div>
-
-                    <div class="sm:col-span-2">
-                        <select id="filter-person" onchange="renderEntries()" class="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition">
-                            <option value="ALL">Person: Alle</option>
-                        </select>
-                    </div>
-
-                    <div class="sm:col-span-2">
-                        <select id="filter-status" onchange="renderEntries()" class="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition">
-                            <option value="ACTIVE">Offen & Begonnen</option>
-                            <option value="ALL">Alle Status</option>
-                            <option value="offen">Nur Offen</option>
-                            <option value="begonnen">Nur Begonnen</option>
-                            <option value="abgeschlossen">Abgeschlossen</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- Ergebniszeile & Sortierung -->
-                <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100 text-xs text-slate-500">
-                    <span id="entries-count-label">0 Einträge angezeigt</span>
-                    <div class="flex items-center gap-2">
-                        <label for="filter-sort" class="text-slate-400">Sortieren:</label>
-                        <select id="filter-sort" onchange="renderEntries()" class="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                            <option value="prio">Nach Priorität (A → Z)</option>
-                            <option value="date">Nach Datum / Fälligkeit</option>
-                            <option value="updated">Zuletzt bearbeitet</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Aufgaben-Liste -->
-            <div id="entries-list" class="space-y-2.5"></div>
-        </section>
-
-        <!-- ==================== VIEW 2: TERMINE (TAG / WOCHE / MONAT) ==================== -->
-        <section id="view-calendar" class="hidden space-y-4">
-            <!-- Kalender Steuerung -->
-            <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-3 sm:p-4 space-y-3 no-print">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <!-- Zeitraum Tabs -->
-                    <div class="inline-flex bg-slate-100 p-1 rounded-xl">
-                        <button onclick="setCalendarMode('day')" id="cal-mode-day" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white text-slate-900 shadow-xs transition">Tag</button>
-                        <button onclick="setCalendarMode('week')" id="cal-mode-week" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition">Woche</button>
-                        <button onclick="setCalendarMode('month')" id="cal-mode-month" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition">Monat</button>
-                    </div>
-
-                    <!-- Navigation -->
-                    <div class="flex items-center gap-1.5">
-                        <button onclick="shiftCalendar(-1)" class="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition" title="Zurück">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
-                        </button>
-                        <button onclick="resetCalendarToday()" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-xs font-semibold text-slate-700 transition">Heute</button>
-                        <button onclick="shiftCalendar(1)" class="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 transition" title="Weiter">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
-                    <div>
-                        <h2 id="cal-range-title" class="text-sm sm:text-base font-bold text-slate-900">Heute</h2>
-                        <label class="inline-flex items-center gap-1.5 text-xs text-slate-600 mt-1 cursor-pointer select-none">
-                            <input type="checkbox" id="cal-include-tasks" onchange="renderCalendar()" checked class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">
-                            <span>Fällige Aufgaben (B/P) mit anzeigen</span>
-                        </label>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2">
-                        <button onclick="openEntryModal(null, 'T')" class="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-semibold shadow-xs transition">
-                            + Neuer Termin
-                        </button>
-                        <button onclick="copyCalendarList()" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition">
-                            Liste kopieren
-                        </button>
-                        <button onclick="window.print()" class="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition">
-                            Drucken / PDF
-                        </button>
-                        <button onclick="openMailModal()" class="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition flex items-center gap-1.5">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                            </svg>
-                            <span>Tages-Mail & Wochenvorschau</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Kalender Inhalt -->
-            <div id="calendar-content" class="space-y-3"></div>
-        </section>
-
-        <!-- ==================== VIEW 3: PROJEKTE (WERTEHILFE) ==================== -->
-        <section id="view-projects" class="hidden space-y-4">
-            <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80 p-4 space-y-4">
-                <div>
-                    <h2 class="text-base font-bold text-slate-900">Projekt-Wertehilfe pflegen</h2>
-                    <p class="text-xs text-slate-500 mt-0.5">Kürzel dürfen maximal 10 Zeichen lang sein und stehen direkt in allen Formularen & Filtern zur Auswahl.</p>
-                </div>
-
-                <form onsubmit="handleAddProject(event)" class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
-                    <div class="sm:col-span-4">
-                        <input type="text" id="new-project-code" maxlength="10" required placeholder="Projekt-Kürzel (max. 10 Z.)" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white uppercase">
-                    </div>
-                    <div class="sm:col-span-6">
-                        <input type="text" id="new-project-desc" maxlength="60" placeholder="Optionale Bezeichnung / Notiz" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                    </div>
-                    <div class="sm:col-span-2">
-                        <button type="submit" class="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-xs transition">
-                            + Hinzufügen
-                        </button>
-                    </div>
-                </form>
-
-                <div id="projects-list" class="divide-y divide-slate-100 border-t border-slate-100 pt-2"></div>
-            </div>
-        </section>
-    </main>
-
-    <!-- ==================== MOBILE FLOATING ACTION BUTTON ==================== -->
-    <button id="fab-add" onclick="openEntryModal()" class="sm:hidden fixed bottom-5 right-5 z-30 w-14 h-14 rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white shadow-xl shadow-indigo-600/30 flex items-center justify-center transition">
-        <svg class="w-7 h-7" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
-        </svg>
-    </button>
-
-    <!-- ==================== MODAL 1: EINTRAG ANLEGEN / BEARBEITEN ==================== -->
-    <div id="entry-modal" class="hidden fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div class="bg-white w-full sm:max-w-2xl max-h-[94vh] rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col animate-modal overflow-hidden">
-            <!-- Modal Header -->
-            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
-                <h3 id="entry-modal-title" class="text-base font-bold">Neuer Eintrag</h3>
-                <button type="button" onclick="closeEntryModal()" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-
-            <!-- Modal Form Body -->
-            <form id="entry-form" onsubmit="handleSaveEntry(event)" class="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-                <input type="hidden" id="entry-id">
-
-                <!-- 1. Typ Segmented Selector -->
-                <div>
-                    <label class="block text-xs font-bold text-slate-700 mb-1.5">Typ *</label>
-                    <div class="grid grid-cols-4 gap-1.5">
-                        <button type="button" onclick="selectFormType('B')" data-form-type="B" class="form-type-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 text-slate-700 transition">B · Beruflich</button>
-                        <button type="button" onclick="selectFormType('P')" data-form-type="P" class="form-type-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 text-slate-700 transition">P · Privat</button>
-                        <button type="button" onclick="selectFormType('T')" data-form-type="T" class="form-type-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 text-slate-700 transition">T · Termin</button>
-                        <button type="button" onclick="selectFormType('I')" data-form-type="I" class="form-type-btn py-2 px-2 rounded-xl text-xs font-bold border border-slate-200 bg-slate-50 text-slate-700 transition">I · Info</button>
-                    </div>
-                    <input type="hidden" id="entry-typ" value="B">
-                </div>
-
-                <!-- 2. Aufgabe / Titel (max 30 Zeichen) -->
-                <div>
-                    <div class="flex items-center justify-between mb-1">
-                        <label for="entry-aufgabe" class="text-xs font-bold text-slate-700">Aufgabe / Titel *</label>
-                        <span id="entry-aufgabe-counter" class="text-[11px] font-medium text-slate-400">0 / 30 Zeichen</span>
-                    </div>
-                    <input type="text" id="entry-aufgabe" maxlength="30" required oninput="updateTitleCounter()" placeholder="Kurz & prägnant (max. 30 Zeichen)" class="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                </div>
-
-                <!-- 3. Projekt, Prio, Status -->
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                        <div class="flex items-center justify-between mb-1">
-                            <label for="entry-projekt" class="text-xs font-bold text-slate-700">Projekt (max. 10 Z.)</label>
-                            <button type="button" onclick="toggleQuickProjectBox()" class="text-[11px] font-semibold text-indigo-600 hover:underline">+ Neu</button>
-                        </div>
-                        <select id="entry-projekt" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                            <option value="">– Kein Projekt –</option>
-                        </select>
-                        <!-- Inline Schnell-Anlage für Projekt (ohne prompt()) -->
-                        <div id="quick-project-box" class="hidden mt-1.5 flex gap-1.5">
-                            <input type="text" id="quick-project-input" maxlength="10" placeholder="Kürzel..." class="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-white border border-indigo-300 rounded-lg uppercase focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                            <button type="button" onclick="saveQuickProject()" class="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">OK</button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <label for="entry-prio" class="block text-xs font-bold text-slate-700 mb-1">Priorität</label>
-                        <select id="entry-prio" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                            <option value="A">A – Sehr wichtig</option>
-                            <option value="B" selected>B – Wichtig</option>
-                            <option value="C">C – Normal</option>
-                            <option value="Z">Z – Zurückgestellt</option>
-                        </select>
-                    </div>
-
-                    <div>
-                        <label for="entry-status" class="block text-xs font-bold text-slate-700 mb-1">Status</label>
-                        <select id="entry-status" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                            <option value="offen">offen</option>
-                            <option value="begonnen">begonnen</option>
-                            <option value="abgeschlossen">abgeschlossen</option>
-                        </select>
-                    </div>
-                </div>
-
-                <!-- 4. Datum, Uhrzeit & Termin-Wiederholung -->
-                <div class="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-3">
-                    <div class="flex flex-wrap items-center justify-between gap-2">
-                        <label for="entry-datum" id="entry-datum-label" class="text-xs font-bold text-slate-700">Fälligkeitsdatum (optional)</label>
-                        <div class="flex gap-1.5">
-                            <button type="button" onclick="setQuickDate(0)" class="px-2 py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-400 text-[11px] font-medium text-slate-600">Heute</button>
-                            <button type="button" onclick="setQuickDate(1)" class="px-2 py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-400 text-[11px] font-medium text-slate-600">Morgen</button>
-                            <button type="button" onclick="setQuickDate(7)" class="px-2 py-0.5 rounded-lg bg-white border border-slate-200 hover:border-indigo-400 text-[11px] font-medium text-slate-600">+7 Tage</button>
-                        </div>
-                    </div>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                        <div>
-                            <input type="date" id="entry-datum" class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        </div>
-                        <div id="time-fields-start" class="hidden">
-                            <input type="time" id="entry-zeit-von" title="Uhrzeit von" class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        </div>
-                        <div id="time-fields-end" class="hidden">
-                            <input type="time" id="entry-zeit-bis" title="Uhrzeit bis" class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        </div>
-                    </div>
-
-                    <!-- Wiederholung (nur bei Typ T sichtbar) -->
-                    <div id="recurrence-fields" class="hidden grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-slate-200/80">
-                        <div>
-                            <label for="entry-wiederholung" class="block text-[11px] font-bold text-slate-600 mb-1">Wiederholung</label>
-                            <select id="entry-wiederholung" onchange="handleRecurrenceChange()" class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                                <option value="none">Keine (Einzeltermin)</option>
-                                <option value="daily">Täglich</option>
-                                <option value="weekly">Wöchentlich</option>
-                                <option value="monthly">Monatlich</option>
-                            </select>
-                        </div>
-                        <div id="recurrence-end-wrap" class="hidden">
-                            <label for="entry-wiederholung-bis" class="block text-[11px] font-bold text-slate-600 mb-1">Wiederholen bis (Enddatum) *</label>
-                            <input type="date" id="entry-wiederholung-bis" class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 5. Unterstützung (Vorname, Nachname mit Autocomplete) -->
-                <div>
-                    <label class="block text-xs font-bold text-slate-700 mb-1">Unterstützung / Teilnehmer (optional)</label>
-                    <div class="grid grid-cols-2 gap-2.5">
-                        <input type="text" id="entry-vorname" list="datalist-vornamen" placeholder="Vorname" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                        <input type="text" id="entry-nachname" list="datalist-nachnamen" placeholder="Nachname" class="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
-                    </div>
-                    <datalist id="datalist-vornamen"></datalist>
-                    <datalist id="datalist-nachnamen"></datalist>
-                </div>
-
-                <!-- 6. Anlagen / Web-Links -->
-                <div class="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-2.5">
-                    <div class="flex items-center justify-between">
-                        <label class="text-xs font-bold text-slate-700">Anlagen / Web-Links</label>
-                        <span class="text-[11px] text-slate-400">OneDrive-Link, Webseite, SharePoint...</span>
-                    </div>
-                    <div id="entry-links-list" class="space-y-1.5"></div>
-                    <div class="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                        <input type="text" id="new-link-title" placeholder="Bezeichnung (optional)" class="sm:col-span-4 px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        <input type="url" id="new-link-url" placeholder="https://..." class="sm:col-span-6 px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        <button type="button" onclick="addTempLink()" class="sm:col-span-2 py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition">
-                            + Link
-                        </button>
-                    </div>
-                </div>
-
-                <!-- 7. Beschreibung (Chronologisches Protokoll mit Datum) -->
-                <div class="bg-slate-50 border border-slate-200/80 rounded-2xl p-3.5 space-y-2.5">
-                    <div class="flex items-center justify-between">
-                        <label for="new-log-text" class="text-xs font-bold text-slate-700">Beschreibung / Verlaufsprotokoll</label>
-                        <span class="text-[11px] text-slate-400">Wird automatisch mit Datum protokolliert</span>
-                    </div>
-                    <div class="flex gap-2">
-                        <textarea id="new-log-text" rows="2" placeholder="Neuen Protokolleintrag oder Notiz hinzufügen..." class="flex-1 px-3 py-2 text-xs sm:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
-                        <button type="button" onclick="addTempLogEntry()" class="self-end px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shrink-0 transition">
-                            + Notiz
-                        </button>
-                    </div>
-                    <div id="entry-log-list" class="space-y-1.5 max-h-44 overflow-y-auto"></div>
-                </div>
-            </form>
-
-            <!-- Modal Footer -->
-            <div class="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2 shrink-0">
-                <button type="button" id="btn-delete-entry" onclick="handleDeleteEntry()" class="hidden px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs sm:text-sm font-semibold transition">
-                    Löschen
-                </button>
-                <div class="flex items-center gap-2 ml-auto">
-                    <button type="button" onclick="closeEntryModal()" class="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs sm:text-sm font-semibold transition">
-                        Abbrechen
-                    </button>
-                    <button type="submit" form="entry-form" class="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition">
-                        Speichern
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ==================== MODAL 2: TAGES-MAIL & WOCHENVORSCHAU ==================== -->
-    <div id="mail-modal" class="hidden fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-        <div class="bg-white w-full max-w-xl max-h-[90vh] rounded-2xl shadow-2xl flex flex-col animate-modal overflow-hidden">
-            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
-                <h3 class="text-base font-bold">Tages-Mail & Wochenrest-Vorschau</h3>
-                <button type="button" onclick="closeMailModal()" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-            <div class="p-4 sm:p-5 overflow-y-auto space-y-3">
-                <div>
-                    <label for="mail-subject" class="block text-xs font-bold text-slate-600 mb-1">Betreff</label>
-                    <input type="text" id="mail-subject" class="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl">
-                </div>
-                <div>
-                    <label for="mail-body" class="block text-xs font-bold text-slate-600 mb-1">Nachrichtenvorschau</label>
-                    <textarea id="mail-body" rows="12" class="w-full px-3 py-2 text-xs font-mono bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
-                </div>
-            </div>
-            <div class="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2">
-                <button type="button" onclick="copyMailText()" class="px-4 py-2 rounded-xl bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs sm:text-sm font-semibold transition">
-                    Text kopieren
-                </button>
-                <a id="mail-open-link" href="#" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-semibold shadow-sm transition">
-                    Im Mailprogramm öffnen
-                </a>
-            </div>
-        </div>
-    </div>
-
-    <!-- ==================== MODAL 3: DATEN, ONEDRIVE & ZUGRIFFSSCHUTZ ==================== -->
-    <div id="data-modal" class="hidden fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div class="bg-white w-full sm:max-w-2xl max-h-[92vh] rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col animate-modal overflow-hidden">
-            <div class="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
-                <h3 class="text-base font-bold">Daten, OneDrive-Sync & Zugriffsschutz</h3>
-                <button type="button" onclick="closeDataModal()" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition">
-                    <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                </button>
-            </div>
-
-            <div class="p-4 sm:p-5 overflow-y-auto space-y-5">
-                <!-- 1. ONEDRIVE KONFIGURATION -->
-                <div class="bg-sky-50/70 border border-sky-200 rounded-2xl p-4 space-y-3">
-                    <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2 text-sky-950 font-bold text-sm">
-                            <svg class="w-5 h-5 text-sky-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
-                            </svg>
-                            <span>Microsoft OneDrive Sync</span>
-                        </div>
-                        <span id="od-connection-badge" class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">Nicht verbunden</span>
-                    </div>
-
-                    <div id="od-account-info" class="hidden text-xs bg-white border border-sky-200 rounded-xl px-3 py-2 flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                            <span class="text-slate-500">Angemeldet als:</span>
-                            <strong id="od-account-email" class="text-slate-900 ml-1"></strong>
-                        </div>
-                        <button type="button" onclick="logoutOneDrive()" class="text-rose-600 hover:underline font-semibold">Abmelden</button>
-                    </div>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div class="sm:col-span-2">
-                            <label for="od-client-id" class="block text-[11px] font-bold text-sky-950 mb-1">Microsoft App Client-ID (Entra ID)</label>
-                            <input type="text" id="od-client-id" onchange="saveOneDriveConfig(true)" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" class="w-full px-3 py-2 text-xs font-mono bg-white border border-sky-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500">
-                        </div>
-                        <div>
-                            <label for="od-authority-type" class="block text-[11px] font-bold text-sky-950 mb-1">Kontotyp</label>
-                            <select id="od-authority-type" onchange="saveOneDriveConfig(true)" class="w-full px-3 py-2 text-xs bg-white border border-sky-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500">
-                                <option value="common">Alle Konten (Privat + Arbeit)</option>
-                                <option value="consumers">Nur Persönliches Microsoft-Konto</option>
-                                <option value="organizations">Nur Geschäfts-/Schulkonto</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label for="od-file-path" class="block text-[11px] font-bold text-sky-950 mb-1">OneDrive-Dateipfad</label>
-                            <input type="text" id="od-file-path" onchange="saveOneDriveConfig(false)" value="/Apps/TaskTerminCockpit/aufgaben.json" class="w-full px-3 py-2 text-xs font-mono bg-white border border-sky-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500">
-                        </div>
-                    </div>
-
-                    <label class="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
-                        <input type="checkbox" id="od-auto-sync" onchange="saveOneDriveConfig(false)" checked class="rounded border-sky-300 text-sky-600 focus:ring-sky-500">
-                        <span>Änderungen automatisch in OneDrive speichern (Auto-Sync)</span>
-                    </label>
-
-                    <div class="flex flex-wrap items-center gap-2 pt-1">
-                        <button type="button" id="od-btn-login" onclick="loginOneDrive()" class="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold shadow-sm transition">
-                            Mit Microsoft anmelden
-                        </button>
-                        <button type="button" id="od-btn-sync-now" onclick="syncWithOneDrive(true)" class="hidden px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition">
-                            Jetzt synchronisieren
-                        </button>
-                        <button type="button" onclick="copyMobileSetupLink()" class="px-3 py-2 rounded-xl bg-white hover:bg-sky-100 text-sky-900 border border-sky-300 text-xs font-semibold transition">
-                            📱 Handy-Link kopieren
-                        </button>
-                        <button type="button" onclick="toggleSetupGuide()" class="ml-auto text-xs font-semibold text-sky-800 hover:underline">
-                            Einrichtungs-Hilfe (4 Schritte) ▾
-                        </button>
-                    </div>
-
-                    <!-- 4-Schritt Einrichtungs-Hilfe -->
-                    <div id="od-setup-guide" class="hidden bg-white border border-sky-200 rounded-xl p-3 text-xs text-slate-700 space-y-2">
-                        <p class="font-bold text-slate-900">So richtest du OneDrive einmalig ein:</p>
-                        <ol class="list-decimal list-inside space-y-1">
-                            <li>Öffne <strong>portal.azure.com</strong> → <em>App-Registrierungen</em> → <em>Neue Registrierung</em>.</li>
-                            <li>Kontotyp: <em>„Organisationsverzeichnis und persönliche Microsoft-Konten“</em> wählen.</li>
-                            <li>Plattform <strong>Single-Page-Application (SPA)</strong> wählen und exakt diese Umleitungs-URI eintragen:</li>
-                        </ol>
-                        <div class="flex items-center gap-2 bg-slate-100 px-2.5 py-1.5 rounded-lg">
-                            <code id="od-redirect-uri-display" class="text-[11px] font-mono text-slate-800 truncate flex-1"></code>
-                            <button type="button" onclick="copyRedirectUri()" class="px-2 py-1 rounded bg-slate-800 text-white text-[11px] font-semibold shrink-0">Kopieren</button>
-                        </div>
-                        <p class="text-[11px] text-slate-500">4. Nach dem Registrieren die <strong>Anwendungs-ID (Client-ID)</strong> oben einfügen und auf „Mit Microsoft anmelden“ klicken.</p>
-                    </div>
-                </div>
-
-                <!-- 1b. ZUGRIFFSSCHUTZ (PIN / PASSWORT & KONTO-BESCHRÄNKUNG) -->
-                <div class="bg-indigo-50/70 border border-indigo-200 rounded-2xl p-4 space-y-3">
-                    <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2 text-indigo-950 font-bold text-sm">
-                            <svg class="w-5 h-5 text-indigo-600 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                            </svg>
-                            <span>Zugriffsschutz & Sperrbildschirm</span>
-                        </div>
-                        <span id="sec-status-badge" class="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700">Aus</span>
-                    </div>
-
-                    <p class="text-xs text-slate-600 leading-relaxed">
-                        Schützt deine App auf diesem Gerät beim Öffnen mit einer PIN oder einem Passwort (wird verschlüsselt als Hash gespeichert). Deine OneDrive-Daten sind zusätzlich immer durch dein Microsoft-Passwort geschützt.
-                    </p>
-
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                            <label for="sec-pin-new" class="block text-[11px] font-bold text-indigo-950 mb-1">Neue PIN / Passwort</label>
-                            <input type="password" id="sec-pin-new" placeholder="Mind. 4 Zeichen..." class="w-full px-3 py-2 text-xs bg-white border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        </div>
-                        <div>
-                            <label for="sec-pin-confirm" class="block text-[11px] font-bold text-indigo-950 mb-1">Bestätigen</label>
-                            <input type="password" id="sec-pin-confirm" placeholder="Wiederholen..." class="w-full px-3 py-2 text-xs bg-white border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                        </div>
-                    </div>
-
-                    <div class="flex flex-wrap items-center gap-2">
-                        <button type="button" onclick="savePinProtection()" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-sm transition">
-                            PIN-Schutz aktivieren / ändern
-                        </button>
-                        <button type="button" id="sec-btn-remove-pin" onclick="removePinProtection()" class="hidden px-3 py-2 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-semibold transition">
-                            PIN entfernen
-                        </button>
-                        <button type="button" id="sec-btn-lock-now" onclick="closeDataModal(); lockApp();" class="hidden px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition">
-                            Jetzt sperren
-                        </button>
-                    </div>
-
-                    <div class="pt-2 border-t border-indigo-200/70">
-                        <label for="sec-allowed-email" class="block text-[11px] font-bold text-indigo-950 mb-1">Nur dieses Microsoft-Konto erlauben (optional)</label>
-                        <div class="flex gap-2">
-                            <input type="email" id="sec-allowed-email" onchange="saveAllowedEmail(false)" placeholder="z.B. dein.name@gmx.de" class="flex-1 px-3 py-2 text-xs bg-white border border-indigo-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                            <button type="button" onclick="saveAllowedEmail(true)" class="px-3 py-2 rounded-xl bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-300 text-xs font-semibold transition">
-                                Speichern
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 2. LOKALER EXPORT / IMPORT & DIREKTER EXCEL-UPLOAD IN ONEDRIVE -->
-                <div class="space-y-2.5">
-                    <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Excel-Export & Lokale Sicherung</h4>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <button type="button" onclick="exportExcelCSV(false)" class="p-3 rounded-xl border border-slate-200 hover:border-emerald-400 hover:bg-emerald-50/50 text-left transition flex items-start gap-3">
-                            <div class="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 font-bold text-xs">CSV</div>
-                            <div>
-                                <div class="font-semibold text-slate-900 text-xs sm:text-sm">Excel-Tabelle herunterladen</div>
-                                <div class="text-[11px] text-slate-500">Lokale CSV-Datei für Microsoft Excel</div>
-                            </div>
-                        </button>
-
-                        <button type="button" id="od-btn-export-excel" onclick="exportExcelCSV(true)" class="p-3 rounded-xl border border-slate-200 hover:border-sky-400 hover:bg-sky-50/50 text-left transition flex items-start gap-3">
-                            <div class="w-9 h-9 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center shrink-0 font-bold text-xs">OD+</div>
-                            <div>
-                                <div class="font-semibold text-slate-900 text-xs sm:text-sm">Excel direkt in OneDrive</div>
-                                <div class="text-[11px] text-slate-500">Speichert <code>aufgaben_export.csv</code> im OneDrive-Ordner</div>
-                            </div>
-                        </button>
-
-                        <button type="button" onclick="exportJSON()" class="p-3 rounded-xl border border-slate-200 hover:border-indigo-400 hover:bg-indigo-50/50 text-left transition flex items-start gap-3">
-                            <div class="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 font-bold text-xs">JSON</div>
-                            <div>
-                                <div class="font-semibold text-slate-900 text-xs sm:text-sm">JSON-Backup herunterladen</div>
-                                <div class="text-[11px] text-slate-500">Vollständiges Backup auf Gerät sichern</div>
-                            </div>
-                        </button>
-
-                        <label class="p-3 rounded-xl border border-dashed border-slate-300 hover:border-indigo-500 hover:bg-slate-50 cursor-pointer transition flex items-start gap-3">
-                            <div class="w-9 h-9 rounded-lg bg-slate-100 text-slate-700 flex items-center justify-center shrink-0 font-bold text-xs">IN</div>
-                            <div>
-                                <div class="font-semibold text-slate-900 text-xs sm:text-sm">JSON-Datei importieren</div>
-                                <div class="text-[11px] text-slate-500">Lokale Sicherungsdatei einlesen</div>
-                            </div>
-                            <input type="file" accept=".json" onchange="importJSON(event)" class="hidden">
-                        </label>
-                    </div>
-                </div>
-
-                <!-- Beispieldaten / Reset -->
-                <div class="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                    <span class="text-xs text-slate-500">Testdaten verwalten:</span>
-                    <div class="flex gap-2">
-                        <button type="button" id="btn-demo-reset" onclick="resetToDemoData()" class="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition">
-                            Beispieldaten laden
-                        </button>
-                        <button type="button" id="btn-clear-all" onclick="clearAllData()" class="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition">
-                            Alle Daten leeren
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ==================== MODAL 4: ETAG KONFLIKTLÖSUNG ==================== -->
-    <div id="conflict-modal" class="hidden fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-        <div class="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-amber-300 flex flex-col animate-modal overflow-hidden">
-            <div class="px-5 py-3.5 bg-amber-50 border-b border-amber-200 flex items-center gap-2.5">
-                <span class="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 font-bold">!</span>
-                <div>
-                    <h3 class="text-base font-bold text-amber-950">OneDrive Synchronisations-Konflikt</h3>
-                    <p class="text-xs text-amber-800">Die Datei in OneDrive wurde zwischenzeitlich auf einem anderen Gerät geändert.</p>
-                </div>
-            </div>
-            <div class="p-5 space-y-3 text-xs sm:text-sm text-slate-700">
-                <p>Wie möchtest du vorgehen, damit keine Daten verloren gehen?</p>
-                <div class="space-y-2 pt-1">
-                    <button type="button" onclick="resolveSyncConflict('merge')" class="w-full p-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-left transition shadow-sm">
-                        <div class="font-bold">1. Intelligent zusammenführen (Empfohlen)</div>
-                        <div class="text-[11px] text-indigo-100">Kombiniert beide Stände und behält pro Aufgabe automatisch die jeweils neueste Bearbeitung.</div>
-                    </button>
-                    <button type="button" onclick="resolveSyncConflict('remote')" class="w-full p-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-900 text-left transition">
-                        <div class="font-bold">2. OneDrive-Stand übernehmen</div>
-                        <div class="text-[11px] text-slate-600">Lädt die aktuelle Datei aus OneDrive und verwirft ungespeicherte lokale Änderungen.</div>
-                    </button>
-                    <button type="button" onclick="resolveSyncConflict('local')" class="w-full p-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-200 text-left transition">
-                        <div class="font-bold">3. Lokalen Stand erzwingen</div>
-                        <div class="text-[11px] text-amber-800">Überschreibt die Datei in OneDrive mit deinem aktuellen lokalen Stand.</div>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ==================== TOAST NOTIFICATION ==================== -->
-    <div id="toast" class="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none opacity-0 transition-opacity duration-200">
-        <div id="toast-msg" class="bg-slate-900 text-white text-xs sm:text-sm font-medium px-4 py-2.5 rounded-xl shadow-lg border border-slate-700">
-            Gespeichert
-        </div>
-    </div>
-
-    <!-- ==================== JAVASCRIPT LOGIK ==================== -->
-    <script>
-        // --- KONSTANTEN & STORAGE KEYS ---
-        const STORAGE_KEY_ENTRIES = 'ttc_entries_v1';
-        const STORAGE_KEY_PROJECTS = 'ttc_projects_v1';
-        const STORAGE_KEY_OD_CONFIG = 'ttc_onedrive_cfg_v1';
-        const STORAGE_KEY_SECURITY = 'ttc_security_v1';
-        const SESSION_UNLOCK_KEY = 'ttc_unlocked_session_v1';
-
-        const GRAPH_SCOPES = ['User.Read', 'Files.ReadWrite'];
-        const MSAL_CDN_URLS = [
-            'https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js',
-            'https://unpkg.com/@azure/msal-browser@2.38.3/lib/msal-browser.min.js',
-            'https://alcdn.msftauth.net/browser/2.38.3/js/msal-browser.min.js',
-            'https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js'
-        ];
-
-        // --- APP STATE ---
-        let entries = [];
-        let projects = [];
-        let currentMainTab = 'tasks';
-        let currentTypeFilter = 'ALL';
-        let calendarMode = 'day'; // 'day' | 'week' | 'month'
-        let calendarRefDate = new Date();
-
-        // Temporärer Formular-State
-        let tempLinks = [];
-        let tempLogs = [];
-        let deleteArmed = false;
-        let clearAllArmed = false;
-        let demoResetArmed = false;
-
-        // OneDrive / MSAL State
-        let odConfig = {
-            clientId: '',
-            authorityType: 'common',
-            filePath: '/Apps/TaskTerminCockpit/aufgaben.json',
-            autoSync: true,
-            lastEtag: ''
-        };
-        let msalInstance = null;
-        let msalAccount = null;
-        let autoSyncTimer = null;
-        let isSyncing = false;
-        let pendingRemoteConflictPayload = null;
-
-        // Zugriffsschutz State
-        let securityConfig = {
-            pinHash: '',
-            allowedEmail: ''
-        };
-        let emergencyResetArmed = false;
-        let toastTimer = null;
-
-        // --- INITIALISIERUNG ---
-        window.onload = async function () {
-            initPWAManifest();
-            loadSecurityConfig();
-            checkAppLockOnStartup();
-            loadFromStorage();
-            loadOneDriveConfig();
-            refreshProjectDropdowns();
-            refreshPersonDatalists();
-            renderEntries();
-            renderProjects();
-            updateHeaderBadges();
-            await initMSAL();
-        };
-
-        // --- HILFSFUNKTIONEN (DATUM, ESCAPING, TOAST, CLIPBOARD) ---
-        function generateId() {
-            if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-            return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9);
-        }
-
-        function escapeHTML(str) {
-            return String(str ?? '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
-
-        function toISODate(d) {
-            const dt = (d instanceof Date) ? d : new Date(d);
-            const y = dt.getFullYear();
-            const m = String(dt.getMonth() + 1).padStart(2, '0');
-            const day = String(dt.getDate()).padStart(2, '0');
-            return `${y}-${m}-${day}`;
-        }
-
-        function parseISODate(iso) {
-            if (!iso) return null;
-            const parts = iso.split('-').map(Number);
-            if (parts.length !== 3 || parts.some(isNaN)) return null;
-            return new Date(parts[0], parts[1] - 1, parts[2]);
-        }
-
-        function formatDateDE(iso) {
-            const dt = parseISODate(iso);
-            if (!dt) return '';
-            return dt.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' });
-        }
-
-        function formatDateLongDE(d) {
-            return d.toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
-        }
-
-        function formatTimestampDE(dateObj = new Date()) {
-            return dateObj.toLocaleString('de-DE', {
-                day: '2-digit', month: '2-digit', year: 'numeric',
-                hour: '2-digit', minute: '2-digit'
-            });
-        }
-
-        function addDays(dateObj, days) {
-            const d = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
-            d.setDate(d.getDate() + days);
-            return d;
-        }
-
-        function addMonthsClamped(dateObj, months) {
-            const y = dateObj.getFullYear();
-            const m = dateObj.getMonth() + months;
-            const day = dateObj.getDate();
-            const lastDayOfTarget = new Date(y, m + 1, 0).getDate();
-            return new Date(y, m, Math.min(day, lastDayOfTarget));
-        }
-
-        function getMondayOfWeek(d) {
-            const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-            const day = dt.getDay(); // 0 = So, 1 = Mo
-            const diff = (day === 0 ? -6 : 1 - day);
-            dt.setDate(dt.getDate() + diff);
-            return dt;
-        }
-
-        function showToast(msg) {
-            const toast = document.getElementById('toast');
-            const msgEl = document.getElementById('toast-msg');
-            if (!toast || !msgEl) return;
-            msgEl.textContent = msg;
-            toast.classList.remove('opacity-0');
-            toast.classList.add('opacity-100');
-            clearTimeout(toastTimer);
-            toastTimer = setTimeout(() => {
-                toast.classList.remove('opacity-100');
-                toast.classList.add('opacity-0');
-            }, 2600);
-        }
-
-        function copyTextToClipboard(text) {
-            const ta = document.createElement('textarea');
-            ta.value = text;
-            ta.style.position = 'fixed';
-            ta.style.opacity = '0';
-            document.body.appendChild(ta);
-            ta.select();
-            try {
-                document.execCommand('copy');
-            } catch (e) {
-                console.warn('Kopieren fehlgeschlagen:', e);
-            }
-            document.body.removeChild(ta);
-        }
-
-        // --- ZUGRIFFSSCHUTZ (PIN / PASSWORT & KONTO-SPERRE) ---
-        async function hashTextSHA256(text) {
-            const raw = 'ttc-salt-v1:' + String(text);
-            if (window.crypto && crypto.subtle) {
-                const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
-                return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-            }
-            let hash = 0;
-            for (let i = 0; i < raw.length; i++) {
-                hash = ((hash << 5) - hash) + raw.charCodeAt(i);
-                hash |= 0;
-            }
-            return 'fb-' + Math.abs(hash).toString(16);
-        }
-
-        function loadSecurityConfig() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY_SECURITY);
-                if (raw) securityConfig = { ...securityConfig, ...JSON.parse(raw) };
-            } catch (e) {
-                console.error('Fehler beim Laden der Sicherheitseinstellungen:', e);
-            }
-            const emailInput = document.getElementById('sec-allowed-email');
-            if (emailInput) emailInput.value = securityConfig.allowedEmail || '';
-            refreshSecurityUI();
-        }
-
-        function refreshSecurityUI() {
-            const hasPin = Boolean(securityConfig.pinHash);
-            const badge = document.getElementById('sec-status-badge');
-            const removeBtn = document.getElementById('sec-btn-remove-pin');
-            const lockNowBtn = document.getElementById('sec-btn-lock-now');
-            const headerLockBtn = document.getElementById('header-lock-btn');
-
-            if (badge) {
-                badge.textContent = hasPin ? 'Aktiv' : 'Aus';
-                badge.className = hasPin
-                    ? 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800'
-                    : 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700';
-            }
-            if (removeBtn) removeBtn.classList.toggle('hidden', !hasPin);
-            if (lockNowBtn) lockNowBtn.classList.toggle('hidden', !hasPin);
-            if (headerLockBtn) {
-                headerLockBtn.classList.toggle('hidden', !hasPin);
-                headerLockBtn.classList.toggle('flex', hasPin);
-            }
-        }
-
-        function checkAppLockOnStartup() {
-            if (!securityConfig.pinHash) return;
-            if (sessionStorage.getItem(SESSION_UNLOCK_KEY) !== '1') {
-                showLockScreen();
-            }
-        }
-
-        function showLockScreen() {
-            emergencyResetArmed = false;
-            const resetBtn = document.getElementById('btn-emergency-reset');
-            if (resetBtn) {
-                resetBtn.textContent = 'PIN vergessen? Lokalen Speicher zurücksetzen';
-                resetBtn.classList.remove('text-rose-400', 'font-semibold');
-            }
-            document.getElementById('lock-pin-input').value = '';
-            document.getElementById('lock-error-msg').classList.add('hidden');
-            document.getElementById('lock-screen').classList.remove('hidden');
-            setTimeout(() => document.getElementById('lock-pin-input').focus(), 80);
-        }
-
-        function lockApp() {
-            if (!securityConfig.pinHash) {
-                showToast('Bitte zuerst unter „Daten & OneDrive“ eine PIN festlegen.');
-                return;
-            }
-            sessionStorage.removeItem(SESSION_UNLOCK_KEY);
-            showLockScreen();
-        }
-
-        async function handleUnlockApp(e) {
-            e.preventDefault();
-            const input = document.getElementById('lock-pin-input').value;
-            const errMsg = document.getElementById('lock-error-msg');
-            const enteredHash = await hashTextSHA256(input);
-
-            if (enteredHash === securityConfig.pinHash) {
-                sessionStorage.setItem(SESSION_UNLOCK_KEY, '1');
-                document.getElementById('lock-screen').classList.add('hidden');
-                errMsg.classList.add('hidden');
-                showToast('App entsperrt');
-            } else {
-                errMsg.classList.remove('hidden');
-                document.getElementById('lock-pin-input').value = '';
-                document.getElementById('lock-pin-input').focus();
-            }
-        }
-
-        async function savePinProtection() {
-            const p1 = document.getElementById('sec-pin-new').value;
-            const p2 = document.getElementById('sec-pin-confirm').value;
-            if (!p1 || p1.length < 4) {
-                showToast('Bitte mindestens 4 Zeichen als PIN/Passwort eingeben.');
-                return;
-            }
-            if (p1 !== p2) {
-                showToast('PIN/Passwort stimmt nicht überein.');
-                return;
-            }
-            securityConfig.pinHash = await hashTextSHA256(p1);
-            localStorage.setItem(STORAGE_KEY_SECURITY, JSON.stringify(securityConfig));
-            sessionStorage.setItem(SESSION_UNLOCK_KEY, '1');
-            document.getElementById('sec-pin-new').value = '';
-            document.getElementById('sec-pin-confirm').value = '';
-            refreshSecurityUI();
-            showToast('PIN-Schutz aktiviert');
-        }
-
-        function removePinProtection() {
-            securityConfig.pinHash = '';
-            localStorage.setItem(STORAGE_KEY_SECURITY, JSON.stringify(securityConfig));
-            sessionStorage.removeItem(SESSION_UNLOCK_KEY);
-            refreshSecurityUI();
-            showToast('PIN-Schutz entfernt');
-        }
-
-        function saveAllowedEmail(showMsg = false) {
-            const val = (document.getElementById('sec-allowed-email').value || '').trim().toLowerCase();
-            securityConfig.allowedEmail = val;
-            localStorage.setItem(STORAGE_KEY_SECURITY, JSON.stringify(securityConfig));
-            if (showMsg) {
-                showToast(val ? `Zugriff auf ${val} beschränkt` : 'Konto-Beschränkung aufgehoben');
-            }
-        }
-
-        function isAccountAllowed(account) {
-            if (!securityConfig.allowedEmail) return true;
-            const userEmail = (account && account.username ? account.username : '').trim().toLowerCase();
-            return userEmail === securityConfig.allowedEmail;
-        }
-
-        function handleEmergencyReset() {
-            const btn = document.getElementById('btn-emergency-reset');
-            if (!emergencyResetArmed) {
-                emergencyResetArmed = true;
-                btn.textContent = 'Wirklich? Nochmal klicken löscht lokale Daten & PIN (OneDrive bleibt erhalten)';
-                btn.classList.add('text-rose-400', 'font-semibold');
-                return;
-            }
-            localStorage.removeItem(STORAGE_KEY_ENTRIES);
-            localStorage.removeItem(STORAGE_KEY_PROJECTS);
-            localStorage.removeItem(STORAGE_KEY_SECURITY);
-            sessionStorage.removeItem(SESSION_UNLOCK_KEY);
-            securityConfig = { pinHash: '', allowedEmail: '' };
-            entries = [];
-            projects = [];
-            document.getElementById('lock-screen').classList.add('hidden');
-            refreshSecurityUI();
-            rerenderAllViews();
-            showToast('Lokaler Speicher & PIN wurden zurückgesetzt');
-        }
-
-        // --- PWA MANIFEST ---
-        function initPWAManifest() {
-            try {
-                const manifest = {
-                    name: 'Task & Termin Cockpit',
-                    short_name: 'Cockpit',
-                    start_url: window.location.href,
-                    display: 'standalone',
-                    background_color: '#f1f5f9',
-                    theme_color: '#0f172a',
-                    icons: [
-                        {
-                            src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='42' fill='%234f46e5'/%3E%3Cpath d='M56 98l26 26 54-56' fill='none' stroke='%23ffffff' stroke-width='18' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E",
-                            sizes: '192x192',
-                            type: 'image/svg+xml'
-                        }
-                    ]
-                };
-                const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
-                document.getElementById('pwa-manifest').href = URL.createObjectURL(blob);
+<!-- ... existing code ... -->
             } catch (e) {
                 console.warn('PWA Manifest konnte nicht initialisiert werden:', e);
             }
+        }
+
+        // --- DATEN-NORMALISIERUNG (KOMPATIBILITÄT FÜR ÄLTERE VERSIONEN) ---
+        function normalizeProject(p) {
+            if (!p) return null;
+            if (typeof p === 'string') {
+                const code = p.trim().toUpperCase().slice(0, 10);
+                return code ? { code, desc: '' } : null;
+            }
+            const code = String(p.code || p.name || p.id || p.kuerzel || '').trim().toUpperCase().slice(0, 10);
+            if (!code) return null;
+            return {
+                code,
+                desc: String(p.desc || p.description || p.bezeichnung || p.notiz || '').trim()
+            };
+        }
+
+        function normalizeEntry(raw) {
+            if (!raw || typeof raw !== 'object') return null;
+            const nowIso = new Date().toISOString();
+
+            const rawLinks = raw.anlagen || raw.links || raw.attachments || [];
+            const anlagen = Array.isArray(rawLinks)
+                ? rawLinks.map(l => {
+                    if (typeof l === 'string') return { titel: l.replace(/^https?:\/\//i, '').slice(0, 28), url: l };
+                    if (!l || !(l.url || l.href)) return null;
+                    const url = String(l.url || l.href || '').trim();
+                    return {
+                        titel: String(l.titel || l.title || l.name || l.label || url).trim(),
+                        url
+                    };
+                }).filter(Boolean)
+                : [];
+
+            const rawLogs = raw.beschreibung ?? raw.logs ?? raw.history ?? raw.protokoll ?? raw.notes ?? [];
+            let beschreibung = [];
+            if (Array.isArray(rawLogs)) {
+                beschreibung = rawLogs.map(b => {
+                    if (typeof b === 'string') return { datum: formatTimestampDE(), text: b };
+                    if (!b) return null;
+                    const text = String(b.text || b.note || b.content || b.nachricht || '').trim();
+                    if (!text) return null;
+                    return {
+                        datum: String(b.datum || b.date || b.timestamp || formatTimestampDE()),
+                        text
+                    };
+                }).filter(Boolean);
+            } else if (typeof rawLogs === 'string' && rawLogs.trim()) {
+                beschreibung = [{ datum: formatTimestampDE(), text: rawLogs.trim() }];
+            }
+
+            const supObj = (raw.unterstuetzung && typeof raw.unterstuetzung === 'object') ? raw.unterstuetzung : {};
+            const vorname = String(raw.unterstuetzungVorname || raw.supportFirst || raw.supportFirstName || raw.helperFirst || raw.vorname || supObj.vorname || supObj.firstName || '').trim();
+            const nachname = String(raw.unterstuetzungNachname || raw.supportLast || raw.supportLastName || raw.helperLast || raw.nachname || supObj.nachname || supObj.lastName || '').trim();
+
+            return {
+                id: String(raw.id || generateId()),
+                typ: String(raw.typ || raw.type || 'B').toUpperCase(),
+                aufgabe: String(raw.aufgabe || raw.titel || raw.title || raw.name || '').trim(),
+                projekt: String(raw.projekt || raw.project || '').trim().toUpperCase(),
+                datum: String(raw.datum || raw.date || raw.dueDate || '').trim(),
+                zeitVon: String(raw.zeitVon || raw.startTime || raw.timeFrom || raw.von || '').trim(),
+                zeitBis: String(raw.zeitBis || raw.endTime || raw.timeTo || raw.bis || '').trim(),
+                wiederholung: String(raw.wiederholung || raw.recurrence || raw.repeat || 'none'),
+                wiederholungBis: String(raw.wiederholungBis || raw.recurrenceEnd || raw.repeatUntil || '').trim(),
+                completedDates: Array.isArray(raw.completedDates) ? raw.completedDates : [],
+                prio: String(raw.prio || raw.priority || 'B').toUpperCase(),
+                status: String(raw.status || 'offen').toLowerCase(),
+                unterstuetzungVorname: vorname,
+                unterstuetzungNachname: nachname,
+                anlagen,
+                beschreibung,
+                erstelltAm: raw.erstelltAm || raw.createdAt || nowIso,
+                geaendertAm: raw.geaendertAm || raw.updatedAt || raw.erstelltAm || nowIso,
+                isDemo: Boolean(raw.isDemo)
+            };
+        }
+
+        function normalizePayload(parsed) {
+            if (!parsed) return { entries: [], projects: [] };
+            const rawEntries = Array.isArray(parsed)
+                ? parsed
+                : (parsed.entries || parsed.tasks || parsed.items || parsed.aufgaben || []);
+            const rawProjects = Array.isArray(parsed.projects || parsed.projekte)
+                ? (parsed.projects || parsed.projekte)
+                : [];
+
+            const normEntries = Array.isArray(rawEntries) ? rawEntries.map(normalizeEntry).filter(Boolean) : [];
+            const projMap = new Map();
+            rawProjects.map(normalizeProject).filter(Boolean).forEach(p => projMap.set(p.code, p));
+
+            normEntries.forEach(e => {
+                if (e.projekt && !projMap.has(e.projekt)) {
+                    projMap.set(e.projekt, { code: e.projekt, desc: '' });
+                }
+            });
+
+            return {
+                entries: normEntries,
+                projects: Array.from(projMap.values())
+            };
         }
 
         // --- DATEN LADEN, SPEICHERN & DEMO-DATEN ---
@@ -1132,10 +111,21 @@
                 const rawEntries = localStorage.getItem(STORAGE_KEY_ENTRIES);
                 const rawProjects = localStorage.getItem(STORAGE_KEY_PROJECTS);
                 if (rawEntries !== null) {
-                    entries = JSON.parse(rawEntries);
-                    projects = rawProjects ? JSON.parse(rawProjects) : [];
+                    const normalized = normalizePayload({
+                        entries: JSON.parse(rawEntries),
+                        projects: rawProjects ? JSON.parse(rawProjects) : []
+                    });
+                    entries = normalized.entries;
+                    projects = normalized.projects;
                 } else {
-                    seedDemoData();
+                    const legacyFound = tryRecoverLegacyLocalStorage();
+                    if (legacyFound) {
+                        entries = legacyFound.entries;
+                        projects = legacyFound.projects;
+                        saveToStorage(false);
+                    } else {
+                        seedDemoData();
+                    }
                 }
             } catch (err) {
                 console.error('Fehler beim Laden aus localStorage:', err);
@@ -1144,1312 +134,116 @@
             }
         }
 
-        function saveToStorage(triggerCloudSync = true) {
-            localStorage.setItem(STORAGE_KEY_ENTRIES, JSON.stringify(entries));
-            localStorage.setItem(STORAGE_KEY_PROJECTS, JSON.stringify(projects));
-            updateHeaderBadges();
-            refreshProjectDropdowns();
-            refreshPersonDatalists();
-
-            if (triggerCloudSync && msalAccount && odConfig.autoSync) {
-                scheduleAutoSync();
+        function tryRecoverLegacyLocalStorage() {
+            try {
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (!key || key.startsWith('msal.') || key.startsWith('ttc_')) continue;
+                    const val = localStorage.getItem(key);
+                    if (!val || (!val.startsWith('{') && !val.startsWith('['))) continue;
+                    const parsed = JSON.parse(val);
+                    const norm = normalizePayload(parsed);
+                    if (norm.entries.length > 0 && norm.entries.some(e => e.aufgabe)) {
+                        return norm;
+                    }
+                }
+            } catch (e) {
+                console.warn('Legacy-Scan Hinweis:', e);
             }
+            return null;
         }
 
-        function seedDemoData() {
-            const today = toISODate(new Date());
-            const tomorrow = toISODate(addDays(new Date(), 1));
-            const nextMonth = toISODate(addMonthsClamped(new Date(), 2));
-            const nowIso = new Date().toISOString();
-
-            projects = [
-                { code: 'ALLGEMEIN', desc: 'Allgemeine Aufgaben & Orga' },
-                { code: 'IT-2026', desc: 'Digitalisierung & Tools' },
-                { code: 'PRIVAT', desc: 'Haus, Familie & Freizeit' }
-            ];
-
-            entries = [
-                {
-                    id: generateId(),
-                    typ: 'B',
-                    aufgabe: 'Quartalsbericht abstimmen',
-                    projekt: 'IT-2026',
-                    datum: tomorrow,
-                    zeitVon: '',
-                    zeitBis: '',
-                    wiederholung: 'none',
-                    wiederholungBis: '',
-                    completedDates: [],
-                    prio: 'A',
-                    status: 'begonnen',
-                    unterstuetzungVorname: 'Sabine',
-                    unterstuetzungNachname: 'Müller',
-                    anlagen: [{ titel: 'SharePoint Ordner', url: 'https://www.office.com' }],
+        function saveToStorage(triggerCloudSync = true) {
+<!-- ... existing code ... -->
                     beschreibung: [
                         { datum: formatTimestampDE(), text: 'Erste Zahlen zusammengestellt, Rückfrage bei Sabine offen.' }
                     ],
                     erstelltAm: nowIso,
-                    geaendertAm: nowIso
+                    geaendertAm: nowIso,
+                    isDemo: true
                 },
                 {
                     id: generateId(),
                     typ: 'T',
                     aufgabe: 'Wochen-Jourfixe Team',
-                    projekt: 'IT-2026',
-                    datum: today,
-                    zeitVon: '09:30',
-                    zeitBis: '10:15',
-                    wiederholung: 'weekly',
-                    wiederholungBis: nextMonth,
-                    completedDates: [],
-                    prio: 'B',
-                    status: 'offen',
-                    unterstuetzungVorname: 'Thomas',
-                    unterstuetzungNachname: 'Becker',
-                    anlagen: [],
+<!-- ... existing code ... -->
                     beschreibung: [
                         { datum: formatTimestampDE(), text: 'Wöchentlicher Statusabgleich zu offenen Projekten.' }
                     ],
                     erstelltAm: nowIso,
-                    geaendertAm: nowIso
+                    geaendertAm: nowIso,
+                    isDemo: true
                 },
                 {
                     id: generateId(),
                     typ: 'I',
                     aufgabe: 'Microsoft OneDrive Portal',
-                    projekt: 'ALLGEMEIN',
-                    datum: '',
-                    zeitVon: '',
-                    zeitBis: '',
-                    wiederholung: 'none',
-                    wiederholungBis: '',
-                    completedDates: [],
-                    prio: 'C',
-                    status: 'offen',
-                    unterstuetzungVorname: '',
-                    unterstuetzungNachname: '',
-                    anlagen: [{ titel: 'OneDrive öffnen', url: 'https://onedrive.live.com' }],
+<!-- ... existing code ... -->
                     beschreibung: [
                         { datum: formatTimestampDE(), text: 'Schnellzugriff auf meine Ablage.' }
                     ],
                     erstelltAm: nowIso,
-                    geaendertAm: nowIso
+                    geaendertAm: nowIso,
+                    isDemo: true
                 },
                 {
                     id: generateId(),
                     typ: 'P',
                     aufgabe: 'Winterreifen Termin klären',
-                    projekt: 'PRIVAT',
-                    datum: tomorrow,
-                    zeitVon: '',
-                    zeitBis: '',
-                    wiederholung: 'none',
-                    wiederholungBis: '',
-                    completedDates: [],
-                    prio: 'B',
-                    status: 'offen',
-                    unterstuetzungVorname: '',
-                    unterstuetzungNachname: '',
+<!-- ... existing code ... -->
                     anlagen: [],
                     beschreibung: [],
                     erstelltAm: nowIso,
-                    geaendertAm: nowIso
+                    geaendertAm: nowIso,
+                    isDemo: true
                 }
             ];
             saveToStorage(false);
         }
-
-        function resetToDemoData() {
-            const btn = document.getElementById('btn-demo-reset');
-            if (!demoResetArmed) {
-                demoResetArmed = true;
-                btn.textContent = 'Nochmal klicken zum Überschreiben';
-                setTimeout(() => {
-                    demoResetArmed = false;
-                    if (btn) btn.textContent = 'Beispieldaten laden';
-                }, 4000);
-                return;
-            }
-            demoResetArmed = false;
-            btn.textContent = 'Beispieldaten laden';
-            seedDemoData();
-            rerenderAllViews();
-            showToast('Beispieldaten geladen');
-        }
-
-        function clearAllData() {
-            const btn = document.getElementById('btn-clear-all');
-            if (!clearAllArmed) {
-                clearAllArmed = true;
-                btn.textContent = 'Wirklich alles löschen?';
-                setTimeout(() => {
-                    clearAllArmed = false;
-                    if (btn) btn.textContent = 'Alle Daten leeren';
-                }, 4000);
-                return;
-            }
-            clearAllArmed = false;
-            btn.textContent = 'Alle Daten leeren';
-            entries = [];
-            projects = [];
-            saveToStorage(true);
-            rerenderAllViews();
-            showToast('Alle Daten geleert');
-        }
-
-        // --- ONEDRIVE & MSAL INTEGRATION ---
-        function isMobileDevice() {
-            const ua = navigator.userAgent || '';
-            const isStandalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
-            return /Android|iPhone|iPad|iPod|Mobile/i.test(ua) || isStandalone;
-        }
-
-        function loadOneDriveConfig() {
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY_OD_CONFIG);
-                if (raw) odConfig = { ...odConfig, ...JSON.parse(raw) };
-
-                // Konfiguration aus Handy-Einrichtungslink (?cid=...) übernehmen
-                const params = new URLSearchParams(window.location.search);
-                const urlClientId = params.get('cid');
-                if (urlClientId) {
-                    odConfig.clientId = urlClientId.trim();
-                    if (params.get('auth')) odConfig.authorityType = params.get('auth').trim();
-                    if (params.get('path')) odConfig.filePath = params.get('path').trim();
-                    localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
-                    const cleanUrl = window.location.origin + window.location.pathname;
-                    window.history.replaceState({}, document.title, cleanUrl);
-                    setTimeout(() => showToast('OneDrive-Einstellungen vom Link übernommen!'), 400);
-                }
-            } catch (e) {
-                console.error('Fehler beim Laden der OneDrive-Konfiguration:', e);
-            }
-
-            document.getElementById('od-client-id').value = odConfig.clientId || '';
-            document.getElementById('od-authority-type').value = odConfig.authorityType || 'common';
-            document.getElementById('od-file-path').value = odConfig.filePath || '/Apps/TaskTerminCockpit/aufgaben.json';
-            document.getElementById('od-auto-sync').checked = odConfig.autoSync !== false;
-
-            const redirectEl = document.getElementById('od-redirect-uri-display');
-            if (redirectEl) redirectEl.textContent = window.location.origin + window.location.pathname;
-        }
-
-        function saveOneDriveConfig(reinit = true) {
-            const oldClientId = odConfig.clientId;
-            const oldAuth = odConfig.authorityType;
-
-            odConfig.clientId = document.getElementById('od-client-id').value.trim();
-            odConfig.authorityType = document.getElementById('od-authority-type').value;
-            let path = document.getElementById('od-file-path').value.trim() || '/Apps/TaskTerminCockpit/aufgaben.json';
-            if (!path.startsWith('/')) path = '/' + path;
-            odConfig.filePath = path;
-            odConfig.autoSync = document.getElementById('od-auto-sync').checked;
-
-            localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
-
-            if (reinit && (oldClientId !== odConfig.clientId || oldAuth !== odConfig.authorityType)) {
-                initMSAL();
-            }
-        }
-
-        function copyMobileSetupLink() {
-            saveOneDriveConfig(false);
-            if (!odConfig.clientId) {
-                showToast('Bitte zuerst deine Client-ID eintragen.');
-                return;
-            }
-            const base = window.location.origin + window.location.pathname;
-            const url = `${base}?cid=${encodeURIComponent(odConfig.clientId)}&auth=${encodeURIComponent(odConfig.authorityType || 'common')}&path=${encodeURIComponent(odConfig.filePath || '/Apps/TaskTerminCockpit/aufgaben.json')}`;
-            copyTextToClipboard(url);
-            showToast('Handy-Link kopiert – einfach am Smartphone öffnen!');
-        }
-
-        function toggleSetupGuide() {
-            document.getElementById('od-setup-guide').classList.toggle('hidden');
-        }
-
-        function copyRedirectUri() {
-            copyTextToClipboard(window.location.origin + window.location.pathname);
-            showToast('Redirect-URI kopiert');
-        }
-
-        async function ensureMsalLoaded() {
-            if (window.msal) return true;
-            for (const url of MSAL_CDN_URLS) {
-                try {
-                    await new Promise((resolve, reject) => {
-                        const script = document.createElement('script');
-                        script.src = url;
-                        script.crossOrigin = 'anonymous';
-                        script.onload = resolve;
-                        script.onerror = reject;
-                        document.head.appendChild(script);
-                    });
-                    if (window.msal) return true;
-                } catch (e) {
-                    console.warn('MSAL CDN fehlgeschlagen, versuche Fallback:', url);
-                }
-            }
-            return Boolean(window.msal);
-        }
-
-        async function initMSAL() {
-            const loaded = await ensureMsalLoaded();
-            if (!loaded) {
-                updateSyncStatusUI('offline', 'Microsoft-SDK blockiert oder offline');
-                return;
-            }
-            if (!odConfig.clientId) {
-                msalInstance = null;
-                msalAccount = null;
-                refreshOneDriveUI();
-                updateSyncStatusUI('disconnected', 'Lokal gespeichert · OneDrive nicht verbunden');
-                return;
-            }
-
-            try {
-                const redirectUri = window.location.origin + window.location.pathname;
-                msalInstance = new msal.PublicClientApplication({
-                    auth: {
-                        clientId: odConfig.clientId,
-                        authority: `https://login.microsoftonline.com/${odConfig.authorityType || 'common'}`,
-                        redirectUri: redirectUri
-                    },
-                    cache: {
-                        cacheLocation: 'localStorage',
-                        storeAuthStateInCookie: false
-                    }
-                });
-
-                if (typeof msalInstance.initialize === 'function') {
-                    await msalInstance.initialize();
-                }
-
-                const redirectResp = await msalInstance.handleRedirectPromise();
-                if (redirectResp && redirectResp.account) {
-                    if (!isAccountAllowed(redirectResp.account)) {
-                        showToast('Zugriff verweigert: Dieses Microsoft-Konto ist nicht freigegeben.');
-                        msalAccount = redirectResp.account;
-                        await logoutOneDrive();
-                        return;
-                    }
-                    msalAccount = redirectResp.account;
-                    msalInstance.setActiveAccount(msalAccount);
-                    refreshOneDriveUI();
-                    updateSyncStatusUI('connected', `OneDrive verbunden (${msalAccount.username})`);
-                    await syncWithOneDrive(true);
-                    return;
-                }
-
-                const accounts = msalInstance.getAllAccounts();
-                if (accounts.length > 0) {
-                    if (!isAccountAllowed(accounts[0])) {
-                        msalAccount = accounts[0];
-                        await logoutOneDrive();
-                        return;
-                    }
-                    msalAccount = accounts[0];
-                    msalInstance.setActiveAccount(msalAccount);
-                    refreshOneDriveUI();
-                    updateSyncStatusUI('connected', `OneDrive verbunden (${msalAccount.username})`);
-                    await syncWithOneDrive(false);
-                } else {
-                    msalAccount = null;
-                    refreshOneDriveUI();
-                    updateSyncStatusUI('disconnected', 'Client-ID bereit · Bitte anmelden');
-                }
-            } catch (err) {
-                console.error('MSAL Init Fehler:', err);
-                updateSyncStatusUI('error', 'MSAL-Konfigurationsfehler');
-            }
-        }
-
-        async function loginOneDrive() {
-            saveOneDriveConfig(false);
-            if (!odConfig.clientId) {
-                showToast('Bitte zuerst deine Microsoft Client-ID eingeben.');
-                document.getElementById('od-setup-guide').classList.remove('hidden');
-                return;
-            }
-            const loaded = await ensureMsalLoaded();
-            if (!loaded) {
-                showToast('Microsoft-SDK konnte nicht geladen werden (Adblocker/Offline?).');
-                return;
-            }
-            if (!msalInstance) await initMSAL();
-            if (!msalInstance) return;
-
-            const loginReq = { scopes: GRAPH_SCOPES, prompt: 'select_account' };
-
-            // Auf Android / Mobilgeräten direkt Redirect nutzen (vermeidet blockierte Popups)
-            if (isMobileDevice()) {
-                try {
-                    await msalInstance.loginRedirect(loginReq);
-                } catch (err) {
-                    console.error('Redirect Login Fehler:', err);
-                    showToast('Anmeldung fehlgeschlagen: ' + (err.errorMessage || err.message));
-                }
-                return;
-            }
-
-            try {
-                const loginResponse = await msalInstance.loginPopup(loginReq);
-                if (!isAccountAllowed(loginResponse.account)) {
-                    showToast('Zugriff verweigert: Dieses Microsoft-Konto ist nicht freigegeben.');
-                    msalAccount = loginResponse.account;
-                    await logoutOneDrive();
-                    return;
-                }
-                msalAccount = loginResponse.account;
-                msalInstance.setActiveAccount(msalAccount);
-                refreshOneDriveUI();
-                showToast(`Verbunden als ${msalAccount.username}`);
-                await syncWithOneDrive(true);
-            } catch (err) {
-                console.warn('Popup-Login fehlgeschlagen, versuche Redirect:', err);
-                if (err.errorCode === 'popup_window_error' || err.errorCode === 'empty_window_error' || err.errorCode === 'monitor_window_timeout') {
-                    await msalInstance.loginRedirect(loginReq);
-                } else if (err.errorCode !== 'user_cancelled') {
-                    showToast('Anmeldung fehlgeschlagen: ' + (err.errorMessage || err.message));
-                }
-            }
-        }
-
-        async function logoutOneDrive() {
-            const acc = msalAccount;
-            msalAccount = null;
-            odConfig.lastEtag = '';
-            localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
-            refreshOneDriveUI();
-            updateSyncStatusUI('disconnected', 'Abgemeldet · Nur lokal gespeichert');
-            if (msalInstance && acc) {
-                try {
-                    if (isMobileDevice()) {
-                        await msalInstance.logoutRedirect({ account: acc });
-                    } else {
-                        await msalInstance.logoutPopup({ account: acc });
-                    }
-                } catch (e) {
-                    console.warn('Logout-Hinweis:', e);
-                }
-            }
-            showToast('Von OneDrive abgemeldet');
-        }
-
-        async function getGraphToken() {
-            if (!msalInstance || !msalAccount) throw new Error('Nicht mit Microsoft angemeldet.');
-            try {
-                const resp = await msalInstance.acquireTokenSilent({
-                    scopes: GRAPH_SCOPES,
-                    account: msalAccount
-                });
-                return resp.accessToken;
-            } catch (err) {
-                if (isMobileDevice()) {
-                    await msalInstance.acquireTokenRedirect({ scopes: GRAPH_SCOPES, account: msalAccount });
-                    throw new Error('Redirect zur Token-Erneuerung gestartet');
-                }
-                const resp = await msalInstance.acquireTokenPopup({
-                    scopes: GRAPH_SCOPES,
-                    account: msalAccount
-                });
-                return resp.accessToken;
-            }
-        }
-
-        function buildGraphFileUrl(pathStr) {
-            const clean = (pathStr || '/Apps/TaskTerminCockpit/aufgaben.json').replace(/^\/+/, '');
-            const encoded = clean.split('/').map(encodeURIComponent).join('/');
-            return `https://graph.microsoft.com/v1.0/me/drive/root:/${encoded}`;
-        }
-
-        function scheduleAutoSync() {
-            updateSyncStatusUI('pending', 'Änderungen warten auf Sync...');
-            clearTimeout(autoSyncTimer);
-            autoSyncTimer = setTimeout(() => {
-                pushToOneDrive(false, false);
-            }, 1500);
-        }
-
-        async function downloadOneDriveJson(token) {
-            const metaUrl = buildGraphFileUrl(odConfig.filePath);
-            const metaResp = await fetch(metaUrl, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
-
-            if (metaResp.status === 404) {
-                return { exists: false, etag: '', data: null };
-            }
-            if (!metaResp.ok) {
-                throw new Error(`OneDrive Metadaten-Fehler (${metaResp.status})`);
-            }
-
-            const meta = await metaResp.json();
-            const etag = meta.eTag || '';
-            const contentResp = await fetch(`${metaUrl}:/content`, {
-                headers: { Authorization: `Bearer ${token}` }
-            });
+<!-- ... existing code ... -->
             if (!contentResp.ok) {
                 throw new Error(`OneDrive Download-Fehler (${contentResp.status})`);
             }
             const text = await contentResp.text();
-            const data = text ? JSON.parse(text) : { entries: [], projects: [] };
+            const parsed = text ? JSON.parse(text) : { entries: [], projects: [] };
+            const data = normalizePayload(parsed);
             return { exists: true, etag, data };
         }
-
-        async function uploadOneDriveContent(token, pathStr, contentString, contentType, etagForMatch = '') {
-            const url = `${buildGraphFileUrl(pathStr)}:/content`;
-            const headers = {
-                Authorization: `Bearer ${token}`,
-                'Content-Type': contentType
-            };
-            if (etagForMatch) {
-                headers['If-Match'] = etagForMatch;
-            }
-            const resp = await fetch(url, {
-                method: 'PUT',
-                headers,
-                body: contentString
-            });
-
-            if (resp.status === 412) {
-                return { conflict: true };
-            }
-            if (!resp.ok) {
-                throw new Error(`OneDrive Upload-Fehler (${resp.status})`);
-            }
-            const item = await resp.json();
-            return { conflict: false, etag: item.eTag || '' };
-        }
-
-        async function syncWithOneDrive(showFeedback = false) {
-            if (!msalAccount || isSyncing) return;
-            isSyncing = true;
-            updateSyncStatusUI('syncing', 'Synchronisiere mit OneDrive...');
-
-            try {
-                const token = await getGraphToken();
-                const remote = await downloadOneDriveJson(token);
-
-                if (!remote.exists) {
-                    // Erstmalig in OneDrive anlegen
-                    const payload = JSON.stringify({ version: 2, updatedAt: new Date().toISOString(), projects, entries }, null, 2);
-                    const up = await uploadOneDriveContent(token, odConfig.filePath, payload, 'application/json');
-                    odConfig.lastEtag = up.etag || '';
-                    localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
-                    updateSyncStatusUI('synced', `Synchronisiert · ${new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`);
-                    if (showFeedback) showToast('Datei erstmals in OneDrive angelegt');
-                    return;
-                }
-
+<!-- ... existing code ... -->
                 // Falls noch kein ETag bekannt oder Remote geändert wurde -> Smart Merge
                 if (!odConfig.lastEtag || (remote.etag && remote.etag !== odConfig.lastEtag)) {
-                    const merged = mergeLocalAndRemote(
-                        { entries, projects },
-                        { entries: remote.data.entries || [], projects: remote.data.projects || [] }
-                    );
-                    entries = merged.entries;
-                    projects = merged.projects;
-                    saveToStorage(false);
-                    rerenderAllViews();
+                    const localIsOnlyDemo = entries.length > 0 && entries.every(e => e.isDemo);
+                    if (localIsOnlyDemo && remote.data.entries.length > 0) {
+                        entries = remote.data.entries;
+                        projects = remote.data.projects;
+                        saveToStorage(false);
+                        rerenderAllViews();
+                        odConfig.lastEtag = remote.etag || '';
+                        localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
+                    } else {
+                        const merged = mergeLocalAndRemote(
+                            { entries, projects },
+                            { entries: remote.data.entries || [], projects: remote.data.projects || [] }
+                        );
+                        entries = merged.entries;
+                        projects = merged.projects;
+                        saveToStorage(false);
+                        rerenderAllViews();
 
-                    const payload = JSON.stringify({ version: 2, updatedAt: new Date().toISOString(), projects, entries }, null, 2);
-                    const up = await uploadOneDriveContent(token, odConfig.filePath, payload, 'application/json', remote.etag);
-                    if (up.conflict) {
-                        pendingRemoteConflictPayload = remote.data;
-                        openConflictModal();
-                        return;
+                        const payload = JSON.stringify({ version: 2, updatedAt: new Date().toISOString(), projects, entries }, null, 2);
+                        const up = await uploadOneDriveContent(token, odConfig.filePath, payload, 'application/json', remote.etag);
+                        if (up.conflict) {
+                            pendingRemoteConflictPayload = remote.data;
+                            openConflictModal();
+                            return;
+                        }
+                        odConfig.lastEtag = up.etag || remote.etag;
+                        localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
                     }
-                    odConfig.lastEtag = up.etag || remote.etag;
-                    localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
                 } else {
                     await pushToOneDrive(false, false, token);
                 }
-
-                updateSyncStatusUI('synced', `Synchronisiert · ${new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`);
-                if (showFeedback) showToast('OneDrive ist aktuell');
-            } catch (err) {
-                console.error('Sync-Fehler:', err);
-                updateSyncStatusUI('error', 'Sync fehlgeschlagen (lokal sicher)');
-                if (showFeedback) showToast('OneDrive-Fehler: ' + err.message);
-            } finally {
-                isSyncing = false;
-            }
-        }
-
-        async function pushToOneDrive(forceOverwrite = false, showFeedback = false, existingToken = null) {
-            if (!msalAccount) return;
-            if (!existingToken && isSyncing) return;
-            const manageLock = !existingToken;
-            if (manageLock) {
-                isSyncing = true;
-                updateSyncStatusUI('syncing', 'Speichere in OneDrive...');
-            }
-
-            try {
-                const token = existingToken || await getGraphToken();
-                const payload = JSON.stringify({ version: 2, updatedAt: new Date().toISOString(), projects, entries }, null, 2);
-                const etagHeader = forceOverwrite ? '' : (odConfig.lastEtag || '');
-                const res = await uploadOneDriveContent(token, odConfig.filePath, payload, 'application/json', etagHeader);
-
-                if (res.conflict) {
-                    const remote = await downloadOneDriveJson(token);
-                    pendingRemoteConflictPayload = remote.data;
-                    updateSyncStatusUI('error', 'Sync-Konflikt erkannt');
-                    openConflictModal();
-                    return;
-                }
-
-                odConfig.lastEtag = res.etag || odConfig.lastEtag;
-                localStorage.setItem(STORAGE_KEY_OD_CONFIG, JSON.stringify(odConfig));
-                updateSyncStatusUI('synced', `Synchronisiert · ${new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}`);
-                if (showFeedback) showToast('In OneDrive gespeichert');
-            } catch (err) {
-                console.error('Upload-Fehler:', err);
-                updateSyncStatusUI('error', 'Upload fehlgeschlagen (lokal sicher)');
-                if (showFeedback) showToast('Upload-Fehler: ' + err.message);
-            } finally {
-                if (manageLock) isSyncing = false;
-            }
-        }
-
-        function mergeLocalAndRemote(localData, remoteData) {
-            // Projekte nach Code zusammenführen
-            const projMap = new Map();
-            (remoteData.projects || []).forEach(p => { if (p && p.code) projMap.set(p.code, p); });
-            (localData.projects || []).forEach(p => { if (p && p.code) projMap.set(p.code, p); });
-
-            // Einträge nach ID zusammenführen (neuestes geaendertAm gewinnt, Protokolle & completedDates werden vereint)
-            const entryMap = new Map();
-            (remoteData.entries || []).forEach(e => { if (e && e.id) entryMap.set(e.id, e); });
-
-            (localData.entries || []).forEach(localItem => {
-                if (!localItem || !localItem.id) return;
-                const remoteItem = entryMap.get(localItem.id);
-                if (!remoteItem) {
-                    entryMap.set(localItem.id, localItem);
-                    return;
-                }
-                const localTs = new Date(localItem.geaendertAm || 0).getTime();
-                const remoteTs = new Date(remoteItem.geaendertAm || 0).getTime();
-                const winner = localTs >= remoteTs ? { ...localItem } : { ...remoteItem };
-
-                // Protokoll-Einträge verlustfrei kombinieren
-                const logKeys = new Set();
-                const mergedLogs = [];
-                [...(remoteItem.beschreibung || []), ...(localItem.beschreibung || [])].forEach(l => {
-                    const k = `${l.datum}|${l.text}`;
-                    if (!logKeys.has(k)) {
-                        logKeys.add(k);
-                        mergedLogs.push(l);
-                    }
-                });
-                winner.beschreibung = mergedLogs;
-
-                // Abgehakte Serientermine kombinieren
-                const doneSet = new Set([...(remoteItem.completedDates || []), ...(localItem.completedDates || [])]);
-                winner.completedDates = Array.from(doneSet);
-
-                entryMap.set(localItem.id, winner);
-            });
-
-            return {
-                projects: Array.from(projMap.values()),
-                entries: Array.from(entryMap.values())
-            };
-        }
-
-        function openConflictModal() {
-            document.getElementById('conflict-modal').classList.remove('hidden');
-        }
-
-        async function resolveSyncConflict(strategy) {
-            document.getElementById('conflict-modal').classList.add('hidden');
-            const remoteData = pendingRemoteConflictPayload || { entries: [], projects: [] };
-            pendingRemoteConflictPayload = null;
-
-            if (strategy === 'remote') {
-                entries = remoteData.entries || [];
-                projects = remoteData.projects || [];
-                saveToStorage(false);
-                rerenderAllViews();
-                await syncWithOneDrive(true);
-                showToast('OneDrive-Stand übernommen');
-            } else if (strategy === 'merge') {
-                const merged = mergeLocalAndRemote({ entries, projects }, remoteData);
-                entries = merged.entries;
-                projects = merged.projects;
-                saveToStorage(false);
-                rerenderAllViews();
-                await pushToOneDrive(true, true);
-            } else if (strategy === 'local') {
-                await pushToOneDrive(true, true);
-            }
-        }
-
-        function refreshOneDriveUI() {
-            const connected = Boolean(msalAccount);
-            const badge = document.getElementById('od-connection-badge');
-            const infoBox = document.getElementById('od-account-info');
-            const emailEl = document.getElementById('od-account-email');
-            const loginBtn = document.getElementById('od-btn-login');
-            const syncBtn = document.getElementById('od-btn-sync-now');
-            const quickSyncBtn = document.getElementById('header-quick-sync-btn');
-
-            if (badge) {
-                badge.textContent = connected ? 'Verbunden' : 'Nicht verbunden';
-                badge.className = connected
-                    ? 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800'
-                    : 'px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-200 text-slate-700';
-            }
-            if (infoBox) infoBox.classList.toggle('hidden', !connected);
-            if (emailEl && connected) emailEl.textContent = msalAccount.username || '';
-            if (loginBtn) loginBtn.classList.toggle('hidden', connected);
-            if (syncBtn) syncBtn.classList.toggle('hidden', !connected);
-            if (quickSyncBtn) {
-                quickSyncBtn.classList.toggle('hidden', !connected);
-                quickSyncBtn.classList.toggle('flex', connected);
-            }
-        }
-
-        function updateSyncStatusUI(state, text) {
-            const dot = document.getElementById('sync-status-dot');
-            const label = document.getElementById('sync-status-text');
-            const icon = document.getElementById('header-sync-icon');
-            if (label) label.textContent = text;
-            if (icon) icon.classList.toggle('animate-spin', state === 'syncing');
-
-            if (!dot) return;
-            const colors = {
-                synced: 'bg-emerald-400',
-                connected: 'bg-emerald-400',
-                syncing: 'bg-sky-400 animate-pulse',
-                pending: 'bg-amber-400',
-                disconnected: 'bg-amber-400',
-                offline: 'bg-slate-400',
-                error: 'bg-rose-500'
-            };
-            dot.className = `inline-block w-2 h-2 rounded-full shrink-0 ${colors[state] || 'bg-amber-400'}`;
-        }
-
-        // --- NAVIGATION ---
-        function switchMainTab(tab) {
-            currentMainTab = tab;
-            ['tasks', 'calendar', 'projects'].forEach(t => {
-                document.getElementById(`view-${t}`).classList.toggle('hidden', t !== tab);
-                const btn = document.getElementById(`nav-${t}`);
-                if (t === tab) {
-                    btn.classList.add('border-indigo-400', 'text-white');
-                    btn.classList.remove('border-transparent', 'text-slate-400');
-                } else {
-                    btn.classList.remove('border-indigo-400', 'text-white');
-                    btn.classList.add('border-transparent', 'text-slate-400');
-                }
-            });
-            if (tab === 'tasks') renderEntries();
-            if (tab === 'calendar') renderCalendar();
-            if (tab === 'projects') renderProjects();
-        }
-
-        function rerenderAllViews() {
-            refreshProjectDropdowns();
-            refreshPersonDatalists();
-            updateHeaderBadges();
-            renderEntries();
-            renderCalendar();
-            renderProjects();
-        }
-
-        function updateHeaderBadges() {
-            const activeCount = entries.filter(e => e.status !== 'abgeschlossen').length;
-            const activeBadge = document.getElementById('badge-active-count');
-            if (activeBadge) activeBadge.textContent = activeCount;
-
-            const todayItems = getCalendarItemsForDate(toISODate(new Date()), false);
-            const todayBadge = document.getElementById('badge-today-events');
-            if (todayBadge) todayBadge.textContent = todayItems.length;
-        }
-
-        // --- AUFGABEN & INFOS RENDERING ---
-        function setTypeFilter(typ) {
-            currentTypeFilter = typ;
-            document.querySelectorAll('.type-pill').forEach(btn => {
-                const isActive = btn.dataset.typeFilter === typ;
-                btn.classList.toggle('bg-slate-900', isActive);
-                btn.classList.toggle('text-white', isActive);
-                btn.classList.toggle('bg-slate-100', !isActive);
-                btn.classList.toggle('text-slate-700', !isActive);
-            });
-            renderEntries();
-        }
-
-        function renderEntries() {
-            const listEl = document.getElementById('entries-list');
-            const countLabel = document.getElementById('entries-count-label');
-            if (!listEl) return;
-
-            const search = (document.getElementById('filter-search').value || '').trim().toLowerCase();
-            const projFilter = document.getElementById('filter-project').value;
-            const prioFilter = document.getElementById('filter-prio').value;
-            const personFilter = document.getElementById('filter-person').value;
-            const statusFilter = document.getElementById('filter-status').value;
-            const sortMode = document.getElementById('filter-sort').value;
-
-            let filtered = entries.filter(e => {
-                if (currentTypeFilter !== 'ALL' && e.typ !== currentTypeFilter) return false;
-                if (projFilter !== 'ALL' && (e.projekt || '') !== projFilter) return false;
-                if (prioFilter !== 'ALL' && (e.prio || 'B') !== prioFilter) return false;
-
-                const fullName = `${e.unterstuetzungVorname || ''} ${e.unterstuetzungNachname || ''}`.trim();
-                if (personFilter !== 'ALL' && fullName !== personFilter) return false;
-
-                if (statusFilter === 'ACTIVE' && e.status === 'abgeschlossen') return false;
-                if (statusFilter !== 'ACTIVE' && statusFilter !== 'ALL' && e.status !== statusFilter) return false;
-
-                if (search) {
-                    const logText = (e.beschreibung || []).map(b => b.text).join(' ').toLowerCase();
-                    const linkText = (e.anlagen || []).map(a => `${a.titel} ${a.url}`).join(' ').toLowerCase();
-                    const hay = `${e.aufgabe} ${e.projekt} ${fullName} ${logText} ${linkText}`.toLowerCase();
-                    if (!hay.includes(search)) return false;
-                }
-                return true;
-            });
-
-            const prioOrder = { A: 1, B: 2, C: 3, Z: 4 };
-            filtered.sort((a, b) => {
-                if (sortMode === 'prio') {
-                    const pa = prioOrder[a.prio] || 9;
-                    const pb = prioOrder[b.prio] || 9;
-                    if (pa !== pb) return pa - pb;
-                    return (a.datum || '9999-12-31').localeCompare(b.datum || '9999-12-31');
-                }
-                if (sortMode === 'date') {
-                    return (a.datum || '9999-12-31').localeCompare(b.datum || '9999-12-31');
-                }
-                return (b.geaendertAm || '').localeCompare(a.geaendertAm || '');
-            });
-
-            if (countLabel) {
-                countLabel.textContent = `${filtered.length} ${filtered.length === 1 ? 'Eintrag' : 'Einträge'} angezeigt`;
-            }
-
-            if (filtered.length === 0) {
-                listEl.innerHTML = `
-                    <div class="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center">
-                        <p class="text-sm font-semibold text-slate-600">Keine Einträge für diesen Filter gefunden.</p>
-                        <button onclick="openEntryModal()" class="mt-3 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition">+ Neuen Eintrag anlegen</button>
-                    </div>`;
-                return;
-            }
-
-            const typeStyles = {
-                B: { badge: 'bg-blue-100 text-blue-800 border-blue-200', border: 'border-l-blue-600', label: 'B' },
-                P: { badge: 'bg-emerald-100 text-emerald-800 border-emerald-200', border: 'border-l-emerald-600', label: 'P' },
-                T: { badge: 'bg-amber-100 text-amber-800 border-amber-200', border: 'border-l-amber-500', label: 'T' },
-                I: { badge: 'bg-cyan-100 text-cyan-800 border-cyan-200', border: 'border-l-cyan-600', label: 'I' }
-            };
-            const prioStyles = {
-                A: 'bg-rose-100 text-rose-800',
-                B: 'bg-amber-100 text-amber-800',
-                C: 'bg-slate-100 text-slate-700',
-                Z: 'bg-purple-100 text-purple-800'
-            };
-            const statusStyles = {
-                offen: 'bg-slate-100 text-slate-700 hover:bg-slate-200',
-                begonnen: 'bg-indigo-100 text-indigo-800 hover:bg-indigo-200',
-                abgeschlossen: 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-            };
-            const recLabels = { daily: 'Täglich', weekly: 'Wöchentlich', monthly: 'Monatlich' };
-
-            const todayStr = toISODate(new Date());
-
-            listEl.innerHTML = filtered.map(item => {
-                const ts = typeStyles[item.typ] || typeStyles.B;
-                const ps = prioStyles[item.prio] || prioStyles.B;
-                const ss = statusStyles[item.status] || statusStyles.offen;
-                const isDone = item.status === 'abgeschlossen';
-                const isOverdue = !isDone && item.datum && item.datum < todayStr && item.typ !== 'T';
-                const fullName = `${item.unterstuetzungVorname || ''} ${item.unterstuetzungNachname || ''}`.trim();
-                const lastLog = (item.beschreibung && item.beschreibung.length > 0) ? item.beschreibung[item.beschreibung.length - 1] : null;
-                const timeStr = (item.typ === 'T' && item.zeitVon) ? ` · ${item.zeitVon}${item.zeitBis ? '–' + item.zeitBis : ''}` : '';
-                const recStr = (item.typ === 'T' && item.wiederholung && item.wiederholung !== 'none')
-                    ? `<span class="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-medium">↻ ${recLabels[item.wiederholung]} bis ${formatDateDE(item.wiederholungBis)}</span>`
-                    : '';
-
-                const linksHtml = (item.anlagen && item.anlagen.length > 0)
-                    ? `<div class="flex flex-wrap gap-1.5 pt-1">
-                        ${item.anlagen.map(l => `
-                            <a href="${escapeHTML(l.url)}" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-50 hover:bg-cyan-100 text-cyan-800 border border-cyan-200 text-[11px] font-semibold transition">
-                                <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg>
-                                ${escapeHTML(l.titel || l.url)}
-                            </a>
-                        `).join('')}
-                       </div>`
-                    : '';
-
-                return `
-                <article onclick="openEntryModal('${item.id}')" class="bg-white rounded-2xl shadow-xs border border-slate-200/90 border-l-4 ${ts.border} p-3.5 sm:p-4 hover:shadow-md transition cursor-pointer ${isDone ? 'opacity-65' : ''}">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="min-w-0 flex-1 space-y-1.5">
-                            <div class="flex flex-wrap items-center gap-1.5">
-                                <span class="px-2 py-0.5 rounded-md text-[11px] font-bold border ${ts.badge}">${ts.label}</span>
-                                <span class="px-2 py-0.5 rounded-md text-[11px] font-bold ${ps}">Prio ${escapeHTML(item.prio || 'B')}</span>
-                                ${item.projekt ? `<span class="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-slate-100 text-slate-700">#${escapeHTML(item.projekt)}</span>` : ''}
-                                ${item.datum ? `<span class="px-2 py-0.5 rounded-md text-[11px] font-semibold ${isOverdue ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'}">📅 ${formatDateDE(item.datum)}${escapeHTML(timeStr)}</span>` : ''}
-                                ${recStr}
-                            </div>
-
-                            <h3 class="text-sm sm:text-base font-bold text-slate-900 ${isDone ? 'line-through text-slate-500' : ''}">${escapeHTML(item.aufgabe)}</h3>
-
-                            ${fullName ? `<div class="text-xs text-slate-500">👤 Unterstützung: <span class="font-medium text-slate-700">${escapeHTML(fullName)}</span></div>` : ''}
-
-                            ${lastLog ? `
-                                <div class="text-xs text-slate-600 bg-slate-50 rounded-xl px-2.5 py-1.5 border border-slate-100 line-clamp-2">
-                                    <span class="font-semibold text-slate-400 text-[11px]">${escapeHTML(lastLog.datum)}:</span> ${escapeHTML(lastLog.text)}
-                                    ${item.beschreibung.length > 1 ? `<span class="text-[10px] text-indigo-600 font-semibold ml-1">(+${item.beschreibung.length - 1} weitere)</span>` : ''}
-                                </div>` : ''}
-
-                            ${linksHtml}
-                        </div>
-
-                        <button type="button" onclick="event.stopPropagation(); cycleEntryStatus('${item.id}')" title="Status weiterschalten" class="shrink-0 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition ${ss}">
-                            ${escapeHTML(item.status)}
-                        </button>
-                    </div>
-                </article>`;
-            }).join('');
-        }
-
-        function cycleEntryStatus(id) {
-            const item = entries.find(e => e.id === id);
-            if (!item) return;
-            const order = ['offen', 'begonnen', 'abgeschlossen'];
-            const next = order[(order.indexOf(item.status) + 1) % order.length];
-            item.status = next;
-            item.geaendertAm = new Date().toISOString();
-            item.beschreibung = item.beschreibung || [];
-            item.beschreibung.push({
-                datum: formatTimestampDE(),
-                text: `Status auf „${next}“ geändert.`
-            });
-            saveToStorage(true);
-            renderEntries();
-            showToast(`Status: ${next}`);
-        }
-
-        // --- EINTRAG MODAL (ANLEGEN / BEARBEITEN) ---
-        function openEntryModal(id = null, defaultType = 'B') {
-            deleteArmed = false;
-            const delBtn = document.getElementById('btn-delete-entry');
-            delBtn.textContent = 'Löschen';
-            document.getElementById('quick-project-box').classList.add('hidden');
-            document.getElementById('new-link-title').value = '';
-            document.getElementById('new-link-url').value = '';
-            document.getElementById('new-log-text').value = '';
-
-            if (id) {
-                const item = entries.find(e => e.id === id);
-                if (!item) return;
-                document.getElementById('entry-modal-title').textContent = 'Eintrag bearbeiten';
-                document.getElementById('entry-id').value = item.id;
-                selectFormType(item.typ || 'B');
-                document.getElementById('entry-aufgabe').value = item.aufgabe || '';
-                document.getElementById('entry-projekt').value = item.projekt || '';
-                document.getElementById('entry-prio').value = item.prio || 'B';
-                document.getElementById('entry-status').value = item.status || 'offen';
-                document.getElementById('entry-datum').value = item.datum || '';
-                document.getElementById('entry-zeit-von').value = item.zeitVon || '';
-                document.getElementById('entry-zeit-bis').value = item.zeitBis || '';
-                document.getElementById('entry-wiederholung').value = item.wiederholung || 'none';
-                document.getElementById('entry-wiederholung-bis').value = item.wiederholungBis || '';
-                document.getElementById('entry-vorname').value = item.unterstuetzungVorname || '';
-                document.getElementById('entry-nachname').value = item.unterstuetzungNachname || '';
-                tempLinks = (item.anlagen || []).map(a => ({ ...a }));
-                tempLogs = (item.beschreibung || []).map(b => ({ ...b }));
-                delBtn.classList.remove('hidden');
-            } else {
-                document.getElementById('entry-modal-title').textContent = 'Neuer Eintrag';
-                document.getElementById('entry-id').value = '';
-                selectFormType(defaultType);
-                document.getElementById('entry-aufgabe').value = '';
-                document.getElementById('entry-projekt').value = '';
-                document.getElementById('entry-prio').value = 'B';
-                document.getElementById('entry-status').value = 'offen';
-                document.getElementById('entry-datum').value = defaultType === 'T' ? toISODate(calendarRefDate) : '';
-                document.getElementById('entry-zeit-von').value = '';
-                document.getElementById('entry-zeit-bis').value = '';
-                document.getElementById('entry-wiederholung').value = 'none';
-                document.getElementById('entry-wiederholung-bis').value = '';
-                document.getElementById('entry-vorname').value = '';
-                document.getElementById('entry-nachname').value = '';
-                tempLinks = [];
-                tempLogs = [];
-                delBtn.classList.add('hidden');
-            }
-
-            handleRecurrenceChange();
-            updateTitleCounter();
-            renderTempLinks();
-            renderTempLogs();
-            document.getElementById('entry-modal').classList.remove('hidden');
-        }
-
-        function closeEntryModal() {
-            document.getElementById('entry-modal').classList.add('hidden');
-        }
-
-        function selectFormType(typ) {
-            document.getElementById('entry-typ').value = typ;
-            const activeClasses = {
-                B: 'bg-blue-600 text-white border-blue-600',
-                P: 'bg-emerald-600 text-white border-emerald-600',
-                T: 'bg-amber-500 text-white border-amber-500',
-                I: 'bg-cyan-600 text-white border-cyan-600'
-            };
-            document.querySelectorAll('.form-type-btn').forEach(btn => {
-                const t = btn.dataset.formType;
-                btn.className = `form-type-btn py-2 px-2 rounded-xl text-xs font-bold border transition ${t === typ ? activeClasses[t] : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100'}`;
-            });
-
-            const isTermin = typ === 'T';
-            document.getElementById('entry-datum-label').textContent = isTermin ? 'Termindatum *' : 'Fälligkeitsdatum (optional)';
-            document.getElementById('entry-datum').required = isTermin;
-            document.getElementById('time-fields-start').classList.toggle('hidden', !isTermin);
-            document.getElementById('time-fields-end').classList.toggle('hidden', !isTermin);
-            document.getElementById('recurrence-fields').classList.toggle('hidden', !isTermin);
-            if (!isTermin) {
-                document.getElementById('entry-wiederholung').value = 'none';
-                handleRecurrenceChange();
-            }
-        }
-
-        function handleRecurrenceChange() {
-            const typ = document.getElementById('entry-typ').value;
-            const rec = document.getElementById('entry-wiederholung').value;
-            const showEnd = typ === 'T' && rec !== 'none';
-            const wrap = document.getElementById('recurrence-end-wrap');
-            const endInput = document.getElementById('entry-wiederholung-bis');
-            wrap.classList.toggle('hidden', !showEnd);
-            endInput.required = showEnd;
-
-            if (showEnd && !endInput.value) {
-                const startVal = document.getElementById('entry-datum').value;
-                const base = parseISODate(startVal) || new Date();
-                endInput.value = toISODate(addMonthsClamped(base, 3));
-            }
-        }
-
-        function updateTitleCounter() {
-            const len = (document.getElementById('entry-aufgabe').value || '').length;
-            const el = document.getElementById('entry-aufgabe-counter');
-            el.textContent = `${len} / 30 Zeichen`;
-            el.className = `text-[11px] font-medium ${len >= 28 ? 'text-amber-600 font-bold' : 'text-slate-400'}`;
-        }
-
-        function setQuickDate(offsetDays) {
-            document.getElementById('entry-datum').value = toISODate(addDays(new Date(), offsetDays));
-        }
-
-        function toggleQuickProjectBox() {
-            const box = document.getElementById('quick-project-box');
-            box.classList.toggle('hidden');
-            if (!box.classList.contains('hidden')) {
-                document.getElementById('quick-project-input').value = '';
-                document.getElementById('quick-project-input').focus();
-            }
-        }
-
-        function saveQuickProject() {
-            const code = (document.getElementById('quick-project-input').value || '').trim().toUpperCase().slice(0, 10);
-            if (!code) return;
-            if (!projects.some(p => p.code === code)) {
-                projects.push({ code, desc: '' });
-                saveToStorage(true);
-            }
-            refreshProjectDropdowns();
-            document.getElementById('entry-projekt').value = code;
-            document.getElementById('quick-project-box').classList.add('hidden');
-            showToast(`Projekt ${code} hinzugefügt`);
-        }
-
-        function addTempLink() {
-            const titel = (document.getElementById('new-link-title').value || '').trim();
-            let url = (document.getElementById('new-link-url').value || '').trim();
-            if (!url) {
-                showToast('Bitte eine gültige URL eingeben.');
-                return;
-            }
-            if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-            tempLinks.push({ titel: titel || url.replace(/^https?:\/\//i, '').slice(0, 28), url });
-            document.getElementById('new-link-title').value = '';
-            document.getElementById('new-link-url').value = '';
-            renderTempLinks();
-        }
-
-        function removeTempLink(idx) {
-            tempLinks.splice(idx, 1);
-            renderTempLinks();
-        }
-
-        function renderTempLinks() {
-            const el = document.getElementById('entry-links-list');
-            if (tempLinks.length === 0) {
-                el.innerHTML = '<p class="text-[11px] text-slate-400 italic">Noch keine Links hinterlegt.</p>';
-                return;
-            }
-            el.innerHTML = tempLinks.map((l, idx) => `
-                <div class="flex items-center justify-between gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
-                    <a href="${escapeHTML(l.url)}" target="_blank" rel="noopener noreferrer" class="text-indigo-700 hover:underline font-medium truncate">${escapeHTML(l.titel)}</a>
-                    <button type="button" onclick="removeTempLink(${idx})" class="text-rose-500 hover:text-rose-700 font-bold px-1">✕</button>
-                </div>
-            `).join('');
-        }
-
-        function addTempLogEntry() {
-            const txt = (document.getElementById('new-log-text').value || '').trim();
-            if (!txt) return;
-            tempLogs.push({ datum: formatTimestampDE(), text: txt });
-            document.getElementById('new-log-text').value = '';
-            renderTempLogs();
-        }
-
-        function renderTempLogs() {
-            const el = document.getElementById('entry-log-list');
-            if (tempLogs.length === 0) {
-                el.innerHTML = '<p class="text-[11px] text-slate-400 italic">Noch keine Protokolleinträge.</p>';
-                return;
-            }
-            el.innerHTML = [...tempLogs].reverse().map(l => `
-                <div class="bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs">
-                    <div class="text-[10px] font-bold text-slate-400">${escapeHTML(l.datum)}</div>
-                    <div class="text-slate-700 whitespace-pre-wrap mt-0.5">${escapeHTML(l.text)}</div>
-                </div>
-            `).join('');
-        }
-
-        function handleSaveEntry(e) {
-            e.preventDefault();
-            // Falls noch Text im Notizfeld steht, automatisch ins Protokoll übernehmen
-            const pendingNote = (document.getElementById('new-log-text').value || '').trim();
-            if (pendingNote) {
-                tempLogs.push({ datum: formatTimestampDE(), text: pendingNote });
-            }
-            // Falls noch eine URL im Linkfeld steht, automatisch übernehmen
-            const pendingUrl = (document.getElementById('new-link-url').value || '').trim();
-            if (pendingUrl) {
-                addTempLink();
-            }
-
-            const id = document.getElementById('entry-id').value;
-            const typ = document.getElementById('entry-typ').value;
-            const aufgabe = document.getElementById('entry-aufgabe').value.trim().slice(0, 30);
-            const datum = document.getElementById('entry-datum').value;
-            const wiederholung = typ === 'T' ? document.getElementById('entry-wiederholung').value : 'none';
-            const wiederholungBis = (typ === 'T' && wiederholung !== 'none') ? document.getElementById('entry-wiederholung-bis').value : '';
-
-            if (!aufgabe) {
-                showToast('Bitte eine Aufgabe / einen Titel eingeben.');
-                return;
-            }
-            if (typ === 'T' && !datum) {
-                showToast('Bitte ein Termindatum angeben.');
-                return;
-            }
-            if (typ === 'T' && wiederholung !== 'none' && (!wiederholungBis || wiederholungBis < datum)) {
-                showToast('Das Enddatum der Wiederholung muss ab dem Startdatum liegen.');
-                return;
-            }
-
-            const nowIso = new Date().toISOString();
-            const existing = id ? entries.find(x => x.id === id) : null;
-
-            const record = {
-                id: id || generateId(),
-                typ,
-                aufgabe,
-                projekt: document.getElementById('entry-projekt').value,
-                datum,
-                zeitVon: typ === 'T' ? document.getElementById('entry-zeit-von').value : '',
-                zeitBis: typ === 'T' ? document.getElementById('entry-zeit-bis').value : '',
-                wiederholung,
-                wiederholungBis,
-                completedDates: existing ? (existing.completedDates || []) : [],
-                prio: document.getElementById('entry-prio').value,
-                status: document.getElementById('entry-status').value,
-                unterstuetzungVorname: document.getElementById('entry-vorname').value.trim(),
-                unterstuetzungNachname: document.getElementById('entry-nachname').value.trim(),
-                anlagen: tempLinks,
-                beschreibung: tempLogs,
-                erstelltAm: existing ? existing.erstelltAm : nowIso,
-                geaendertAm: nowIso
-            };
-
-            if (existing) {
-                const idx = entries.findIndex(x => x.id === id);
-                entries[idx] = record;
-            } else {
-                entries.unshift(record);
-            }
-
-            saveToStorage(true);
-            closeEntryModal();
-            rerenderAllViews();
-            showToast(existing ? 'Änderungen gespeichert' : 'Eintrag angelegt');
-        }
-
-        function handleDeleteEntry() {
-            const btn = document.getElementById('btn-delete-entry');
-            if (!deleteArmed) {
-                deleteArmed = true;
-                btn.textContent = 'Wirklich löschen?';
-                return;
-            }
-            const id = document.getElementById('entry-id').value;
-            entries = entries.filter(e => e.id !== id);
-            saveToStorage(true);
-            closeEntryModal();
-            rerenderAllViews();
-            showToast('Eintrag gelöscht');
-        }
-
-        // --- KALENDER & WIEDERHOLUNGS-LOGIK ---
-        function setCalendarMode(mode) {
-            calendarMode = mode;
-            ['day', 'week', 'month'].forEach(m => {
-                const btn = document.getElementById(`cal-mode-${m}`);
-                const active = m === mode;
-                btn.className = active
-                    ? 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-white text-slate-900 shadow-xs transition'
-                    : 'px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 transition';
-            });
-            renderCalendar();
-        }
-
-        function shiftCalendar(dir) {
-            if (calendarMode === 'day') calendarRefDate = addDays(calendarRefDate, dir);
-            else if (calendarMode === 'week') calendarRefDate = addDays(calendarRefDate, dir * 7);
-            else calendarRefDate = new Date(calendarRefDate.getFullYear(), calendarRefDate.getMonth() + dir, 1);
-            renderCalendar();
-        }
-
-        function resetCalendarToday() {
-            calendarRefDate = new Date();
-            renderCalendar();
-        }
-
-        function occursOnDate(entry, targetIso) {
-            if (!entry.datum) return false;
-            if (entry.datum === targetIso) return true;
-            if (entry.typ !== 'T' || !entry.wiederholung || entry.wiederholung === 'none') return false;
-            if (targetIso < entry.datum) return false;
-            if (entry.wiederholungBis && targetIso > entry.wiederholungBis) return false;
-
-            const start = parseISODate(entry.datum);
-            const target = parseISODate(targetIso);
-            if (!start || !target) return false;
-
-            if (entry.wiederholung === 'daily') return true;
-            if (entry.wiederholung === 'weekly') return start.getDay() === target.getDay();
-            if (entry.wiederholung === 'monthly') {
-                const lastDayOfTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-                const expectedDay = Math.min(start.getDate(), lastDayOfTargetMonth);
-                return target.getDate() === expectedDay;
-            }
-            return false;
-        }
-
-        function getCalendarItemsForDate(isoDate, includeDueTasks = true) {
-            return entries
-                .filter(e => {
-                    if (e.typ === 'T') return occursOnDate(e, isoDate);
-                    if (includeDueTasks && (e.typ === 'B' || e.typ === 'P')) {
-                        return e.datum === isoDate && e.status !== 'abgeschlossen';
-                    }
-                    return false;
-                })
-                .sort((a, b) => (a.zeitVon || '99:99').localeCompare(b.zeitVon || '99:99'));
-        }
-
-        function isOccurrenceDone(entry, isoDate) {
-            if (entry.typ === 'T' && entry.wiederholung && entry.wiederholung !== 'none') {
-                return (entry.completedDates || []).includes(isoDate);
-            }
-            return entry.status === 'abgeschlossen';
-        }
-
-        function toggleOccurrenceDone(entryId, isoDate) {
-            const entry = entries.find(e => e.id === entryId);
-            if (!entry) return;
-
-            if (entry.typ === 'T' && entry.wiederholung && entry.wiederholung !== 'none') {
-                entry.completedDates = entry.completedDates || [];
-                const idx = entry.completedDates.indexOf(isoDate);
-                if (idx >= 0) entry.completedDates.splice(idx, 1);
-                else entry.completedDates.push(isoDate);
-            } else {
-                entry.status = entry.status === 'abgeschlossen' ? 'offen' : 'abgeschlossen';
-            }
-            entry.geaendertAm = new Date().toISOString();
-            saveToStorage(true);
-            renderCalendar();
-            renderEntries();
-        }
-
-        function renderCalendar() {
-            const container = document.getElementById('calendar-content');
-            const titleEl = document.getElementById('cal-range-title');
-            if (!container || !titleEl) return;
-
-            const includeTasks = document.getElementById('cal-include-tasks').checked;
-            const todayIso = toISODate(new Date());
-
-            if (calendarMode === 'day') {
-                const iso = toISODate(calendarRefDate);
-                titleEl.textContent = formatDateLongDE(calendarRefDate);
-                const items = getCalendarItemsForDate(iso, includeTasks);
-                container.innerHTML = renderCalendarDayBlock(iso, items, true);
-                return;
-            }
-
-            if (calendarMode === 'week') {
-                const monday = getMondayOfWeek(calendarRefDate);
-                const sunday = addDays(monday, 6);
-                titleEl.textContent = `Woche: ${formatDateDE(toISODate(monday))} – ${formatDateDE(toISODate(sunday))}`;
-                let html = '';
-                for (let i = 0; i < 7; i++) {
-                    const d = addDays(monday, i);
-                    const iso = toISODate(d);
-                    const items = getCalendarItemsForDate(iso, includeTasks);
-                    html += renderCalendarDayBlock(iso, items, iso === todayIso);
-                }
-                container.innerHTML = html;
-                return;
-            }
-
-            // Monatsansicht
-            const year = calendarRefDate.getFullYear();
-            const month = calendarRefDate.getMonth();
-            titleEl.textContent = calendarRefDate.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
-            const daysInMonth = new Date(year, month + 1, 0).getDate();
-            let html = '';
-            let anyFound = false;
-
-            for (let day = 1; day <= daysInMonth; day++) {
-                const d = new Date(year, month, day);
-                const iso = toISODate(d);
-                const items = getCalendarItemsForDate(iso, includeTasks);
-                if (items.length > 0) {
-                    anyFound = true;
-                    html += renderCalendarDayBlock(iso, items, iso === todayIso);
-                }
-            }
-
-            if (!anyFound) {
-                html = `<div class="bg-white rounded-2xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">Keine Termine in diesem Monat eingetragen.</div>`;
-            }
-            container.innerHTML = html;
-        }
-
+<!-- ... existing code ... -->
         function renderCalendarDayBlock(iso, items, highlightToday) {
             const dt = parseISODate(iso);
             const dayHeader = dt ? dt.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : iso;
@@ -2478,106 +272,113 @@
                                 <div class="text-sm font-semibold text-slate-900 truncate ${done ? 'line-through text-slate-400' : ''}">${escapeHTML(e.aufgabe)}</div>
                             </div>
                         </div>
-                        <button type="button" onclick="openEntryModal('${e.id}')" class="text-xs text-indigo-600 hover:underline font-medium shrink-0 no-print">Details</button>
+                        <button type="button" onclick="openEntryModal('${e.id}')" class="text-xs text-slate-400 hover:text-indigo-600 font-semibold shrink-0">Öffnen</button>
                     </div>`;
                 }).join('');
 
             return `
-            <div class="bg-white rounded-2xl shadow-xs border ${isToday && highlightToday ? 'border-indigo-400 ring-1 ring-indigo-200' : 'border-slate-200/80'} overflow-hidden">
-                <div class="px-4 py-2 ${isToday ? 'bg-indigo-50 text-indigo-950' : 'bg-slate-50 text-slate-700'} border-b border-slate-200/70 flex items-center justify-between">
-                    <span class="text-xs font-bold">${escapeHTML(dayHeader)} ${isToday ? '· HEUTE' : ''}</span>
-                    <span class="text-[11px] font-medium text-slate-500">${items.length} ${items.length === 1 ? 'Eintrag' : 'Einträge'}</span>
-                </div>
-                <div class="divide-y divide-slate-100">${rows}</div>
-            </div>`;
+                <div class="bg-white rounded-2xl shadow-xs border ${isToday && highlightToday ? 'border-indigo-400 ring-1 ring-indigo-200' : 'border-slate-200/90'} overflow-hidden">
+                    <div class="px-4 py-2 ${isToday ? 'bg-indigo-50 text-indigo-900' : 'bg-slate-50 text-slate-700'} border-b border-slate-200/80 flex items-center justify-between">
+                        <span class="text-xs font-bold">${escapeHTML(dayHeader)} ${isToday ? '· Heute' : ''}</span>
+                        <span class="text-[11px] font-semibold text-slate-500">${items.length} ${items.length === 1 ? 'Eintrag' : 'Einträge'}</span>
+                    </div>
+                    <div class="divide-y divide-slate-100">${rows}</div>
+                </div>`;
         }
 
         function copyCalendarList() {
             const includeTasks = document.getElementById('cal-include-tasks').checked;
+            const title = document.getElementById('cal-range-title').textContent;
             let dates = [];
+
             if (calendarMode === 'day') {
                 dates = [toISODate(calendarRefDate)];
             } else if (calendarMode === 'week') {
-                const mon = getMondayOfWeek(calendarRefDate);
-                for (let i = 0; i < 7; i++) dates.push(toISODate(addDays(mon, i)));
+                const monday = getMondayOfWeek(calendarRefDate);
+                for (let i = 0; i < 7; i++) dates.push(toISODate(addDays(monday, i)));
             } else {
-                const y = calendarRefDate.getFullYear(), m = calendarRefDate.getMonth();
-                const dim = new Date(y, m + 1, 0).getDate();
-                for (let d = 1; d <= dim; d++) dates.push(toISODate(new Date(y, m, d)));
+                const y = calendarRefDate.getFullYear();
+                const m = calendarRefDate.getMonth();
+                const count = new Date(y, m + 1, 0).getDate();
+                for (let d = 1; d <= count; d++) dates.push(toISODate(new Date(y, m, d)));
             }
 
-            const lines = [`=== ${document.getElementById('cal-range-title').textContent} ===`, ''];
+            let lines = [`TERMIN- & AUFGABENLISTE (${title})`, '========================================'];
             dates.forEach(iso => {
                 const items = getCalendarItemsForDate(iso, includeTasks);
                 if (items.length === 0 && calendarMode === 'month') return;
-                lines.push(`${formatDateDE(iso)}:`);
+                const dt = parseISODate(iso);
+                const label = dt ? dt.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }) : iso;
+                lines.push(`\n${label}:`);
                 if (items.length === 0) {
-                    lines.push('  - keine Einträge');
+                    lines.push('  – Keine Einträge');
                 } else {
                     items.forEach(e => {
-                        const t = e.zeitVon ? `${e.zeitVon}${e.zeitBis ? '-' + e.zeitBis : ''}` : (e.typ === 'T' ? 'Ganztägig' : 'Fällig');
-                        lines.push(`  [${e.typ}] ${t} | ${e.aufgabe}${e.projekt ? ' (#' + e.projekt + ')' : ''}`);
+                        const done = isOccurrenceDone(e, iso) ? '[x]' : '[ ]';
+                        const time = e.zeitVon ? `${e.zeitVon}${e.zeitBis ? '–' + e.zeitBis : ''} ` : '';
+                        const proj = e.projekt ? ` (#${e.projekt})` : '';
+                        lines.push(`  ${done} [${e.typ}] ${time}${e.aufgabe}${proj}`);
                     });
                 }
             });
 
             copyTextToClipboard(lines.join('\n'));
-            showToast('Terminliste in Zwischenablage kopiert');
+            showToast('Terminliste in die Zwischenablage kopiert');
         }
 
         // --- TAGES-MAIL & WOCHENREST-VORSCHAU ---
         function openMailModal() {
             const today = new Date();
             const todayIso = toISODate(today);
-            const todayItems = getCalendarItemsForDate(todayIso, true);
-
             const monday = getMondayOfWeek(today);
             const sunday = addDays(monday, 6);
-            const subject = `Tagesübersicht ${formatDateDE(todayIso)} & Wochenvorschau`;
 
-            const lines = [
+            const todayEvents = getCalendarItemsForDate(todayIso, true);
+            const subject = `Tages-Briefing ${formatDateDE(todayIso)} + Wochenrest-Vorschau`;
+
+            let bodyLines = [
                 `Guten Morgen,`,
                 ``,
-                `hier sind deine Termine & fälligen Aufgaben für heute (${formatDateLongDE(today)}):`,
-                ``
+                `hier ist deine Übersicht für heute (${formatDateLongDE(today)}):`,
+                `----------------------------------------`
             ];
 
-            if (todayItems.length === 0) {
-                lines.push(`  • Keine Termine oder fälligen Aufgaben für heute.`);
+            if (todayEvents.length === 0) {
+                bodyLines.push('• Keine Termine oder fälligen Aufgaben für heute.');
             } else {
-                todayItems.forEach(e => {
-                    const t = e.zeitVon ? `${e.zeitVon}${e.zeitBis ? '–' + e.zeitBis : ''}` : (e.typ === 'T' ? 'Ganztägig' : 'Fällig');
-                    lines.push(`  • [${e.typ}] ${t}: ${e.aufgabe}${e.projekt ? ' (#' + e.projekt + ')' : ''}`);
+                todayEvents.forEach(e => {
+                    const time = e.zeitVon ? `${e.zeitVon}${e.zeitBis ? '–' + e.zeitBis : ''} Uhr` : (e.typ === 'T' ? 'Ganztägig' : 'Fällig');
+                    const proj = e.projekt ? ` [#${e.projekt}]` : '';
+                    bodyLines.push(`• [${e.typ}] ${time}: ${e.aufgabe}${proj}`);
                 });
             }
 
-            lines.push(``, `--- Vorschau Rest der Woche (bis ${formatDateDE(toISODate(sunday))}) ---`, ``);
-
-            let hasRest = false;
+            bodyLines.push('', 'VORSCHAU REST DER WOCHE (bis Sonntag):', '----------------------------------------');
+            let anyRest = false;
             let cursor = addDays(today, 1);
-            while (toISODate(cursor) <= toISODate(sunday)) {
+            while (cursor <= sunday) {
                 const iso = toISODate(cursor);
                 const dayItems = getCalendarItemsForDate(iso, true);
                 if (dayItems.length > 0) {
-                    hasRest = true;
-                    const dayName = cursor.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-                    lines.push(`${dayName}:`);
+                    anyRest = true;
+                    const dayName = cursor.toLocaleDateString('de-DE', { weekday: 'long', day: '2-digit', month: '2-digit' });
+                    bodyLines.push(`\n${dayName}:`);
                     dayItems.forEach(e => {
-                        const t = e.zeitVon ? `${e.zeitVon}${e.zeitBis ? '–' + e.zeitBis : ''}` : (e.typ === 'T' ? 'Ganztägig' : 'Fällig');
-                        lines.push(`  • [${e.typ}] ${t}: ${e.aufgabe}${e.projekt ? ' (#' + e.projekt + ')' : ''}`);
+                        const time = e.zeitVon ? `${e.zeitVon}${e.zeitBis ? '–' + e.zeitBis : ''}` : (e.typ === 'T' ? 'Ganztägig' : 'Fällig');
+                        const proj = e.projekt ? ` [#${e.projekt}]` : '';
+                        bodyLines.push(`  • [${e.typ}] ${time}: ${e.aufgabe}${proj}`);
                     });
                 }
                 cursor = addDays(cursor, 1);
             }
-
-            if (!hasRest) {
-                lines.push(`  • Keine weiteren Termine für den Rest dieser Woche.`);
+            if (!anyRest) {
+                bodyLines.push('• Keine weiteren Termine für den Rest dieser Woche.');
             }
 
-            const bodyText = lines.join('\n');
+            const body = bodyLines.join('\n');
             document.getElementById('mail-subject').value = subject;
-            document.getElementById('mail-body').value = bodyText;
-            document.getElementById('mail-open-link').href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`;
+            document.getElementById('mail-body').value = body;
+            document.getElementById('mail-open-link').href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
             document.getElementById('mail-modal').classList.remove('hidden');
         }
 
@@ -2586,30 +387,85 @@
         }
 
         function copyMailText() {
-            const txt = `${document.getElementById('mail-subject').value}\n\n${document.getElementById('mail-body').value}`;
-            copyTextToClipboard(txt);
-            showToast('Mail-Text kopiert');
+            const subj = document.getElementById('mail-subject').value;
+            const body = document.getElementById('mail-body').value;
+            copyTextToClipboard(`Betreff: ${subj}\n\n${body}`);
+            showToast('Mailtext kopiert');
         }
 
-        // --- PROJEKTE (WERTEHILFE) ---
+        // --- PROJEKTE & STAMMDATEN ---
+        function renderProjects() {
+            const list = document.getElementById('projects-list');
+            if (!list) return;
+            if (projects.length === 0) {
+                list.innerHTML = `<p class="text-xs text-slate-400 italic py-4 text-center">Noch keine Projekte angelegt.</p>`;
+                return;
+            }
+            const sorted = [...projects].sort((a, b) => a.code.localeCompare(b.code));
+            list.innerHTML = sorted.map(p => {
+                const usageCount = entries.filter(e => e.projekt === p.code).length;
+                return `
+                <div class="py-2.5 flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="px-2 py-0.5 rounded-lg bg-indigo-50 text-indigo-800 font-bold text-xs">#${escapeHTML(p.code)}</span>
+                            <span class="text-[11px] text-slate-400">${usageCount} ${usageCount === 1 ? 'Eintrag' : 'Einträge'}</span>
+                        </div>
+                        ${p.desc ? `<p class="text-xs text-slate-600 mt-0.5 truncate">${escapeHTML(p.desc)}</p>` : ''}
+                    </div>
+                    <button type="button" onclick="deleteProject('${escapeHTML(p.code)}')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold shrink-0 transition">
+                        Entfernen
+                    </button>
+                </div>`;
+            }).join('');
+        }
+
+        function handleAddProject(e) {
+            e.preventDefault();
+            const codeInput = document.getElementById('new-project-code');
+            const descInput = document.getElementById('new-project-desc');
+            const code = (codeInput.value || '').trim().toUpperCase().slice(0, 10);
+            const desc = (descInput.value || '').trim();
+            if (!code) return;
+
+            const existing = projects.find(p => p.code === code);
+            if (existing) {
+                existing.desc = desc || existing.desc;
+                showToast(`Projekt ${code} aktualisiert`);
+            } else {
+                projects.push({ code, desc });
+                showToast(`Projekt ${code} hinzugefügt`);
+            }
+            codeInput.value = '';
+            descInput.value = '';
+            saveToStorage(true);
+            renderProjects();
+        }
+
+        function deleteProject(code) {
+            projects = projects.filter(p => p.code !== code);
+            saveToStorage(true);
+            renderProjects();
+            showToast(`Projekt ${code} aus Wertehilfe entfernt`);
+        }
+
         function refreshProjectDropdowns() {
+            const sorted = [...projects].sort((a, b) => a.code.localeCompare(b.code));
             const filterSel = document.getElementById('filter-project');
             const formSel = document.getElementById('entry-projekt');
-            const prevFilter = filterSel ? filterSel.value : 'ALL';
-            const prevForm = formSel ? formSel.value : '';
-
-            const sorted = [...projects].sort((a, b) => a.code.localeCompare(b.code));
 
             if (filterSel) {
+                const prev = filterSel.value;
                 filterSel.innerHTML = `<option value="ALL">Projekt: Alle</option>` +
-                    sorted.map(p => `<option value="${escapeHTML(p.code)}">${escapeHTML(p.code)}</option>`).join('');
-                filterSel.value = sorted.some(p => p.code === prevFilter) ? prevFilter : 'ALL';
+                    sorted.map(p => `<option value="${escapeHTML(p.code)}">${escapeHTML(p.code)}${p.desc ? ' – ' + escapeHTML(p.desc) : ''}</option>`).join('');
+                filterSel.value = sorted.some(p => p.code === prev) ? prev : 'ALL';
             }
 
             if (formSel) {
+                const prev = formSel.value;
                 formSel.innerHTML = `<option value="">– Kein Projekt –</option>` +
                     sorted.map(p => `<option value="${escapeHTML(p.code)}">${escapeHTML(p.code)}${p.desc ? ' – ' + escapeHTML(p.desc) : ''}</option>`).join('');
-                formSel.value = prevForm;
+                formSel.value = prev;
             }
         }
 
@@ -2619,73 +475,28 @@
             const fullNames = new Set();
 
             entries.forEach(e => {
-                if (e.unterstuetzungVorname) vornamen.add(e.unterstuetzungVorname.trim());
-                if (e.unterstuetzungNachname) nachnamen.add(e.unterstuetzungNachname.trim());
-                const fn = `${e.unterstuetzungVorname || ''} ${e.unterstuetzungNachname || ''}`.trim();
-                if (fn) fullNames.add(fn);
+                if (e.unterstuetzungVorname) vornamen.add(e.unterstuetzungVorname);
+                if (e.unterstuetzungNachname) nachnamen.add(e.unterstuetzungNachname);
+                const full = `${e.unterstuetzungVorname || ''} ${e.unterstuetzungNachname || ''}`.trim();
+                if (full) fullNames.add(full);
             });
 
-            document.getElementById('datalist-vornamen').innerHTML = Array.from(vornamen).sort().map(v => `<option value="${escapeHTML(v)}">`).join('');
-            document.getElementById('datalist-nachnamen').innerHTML = Array.from(nachnamen).sort().map(n => `<option value="${escapeHTML(n)}">`).join('');
+            const dlV = document.getElementById('datalist-vornamen');
+            const dlN = document.getElementById('datalist-nachnamen');
+            const filterP = document.getElementById('filter-person');
 
-            const personSel = document.getElementById('filter-person');
-            if (personSel) {
-                const prev = personSel.value;
-                personSel.innerHTML = `<option value="ALL">Person: Alle</option>` +
-                    Array.from(fullNames).sort().map(fn => `<option value="${escapeHTML(fn)}">${escapeHTML(fn)}</option>`).join('');
-                personSel.value = fullNames.has(prev) ? prev : 'ALL';
+            if (dlV) dlV.innerHTML = Array.from(vornamen).sort().map(v => `<option value="${escapeHTML(v)}">`).join('');
+            if (dlN) dlN.innerHTML = Array.from(nachnamen).sort().map(n => `<option value="${escapeHTML(n)}">`).join('');
+            if (filterP) {
+                const prev = filterP.value;
+                const sortedFull = Array.from(fullNames).sort();
+                filterP.innerHTML = `<option value="ALL">Person: Alle</option>` +
+                    sortedFull.map(n => `<option value="${escapeHTML(n)}">${escapeHTML(n)}</option>`).join('');
+                filterP.value = sortedFull.includes(prev) ? prev : 'ALL';
             }
         }
 
-        function renderProjects() {
-            const listEl = document.getElementById('projects-list');
-            if (!listEl) return;
-
-            if (projects.length === 0) {
-                listEl.innerHTML = '<p class="text-xs text-slate-400 italic py-4 text-center">Noch keine Projekte angelegt.</p>';
-                return;
-            }
-
-            const sorted = [...projects].sort((a, b) => a.code.localeCompare(b.code));
-            listEl.innerHTML = sorted.map(p => {
-                const usage = entries.filter(e => e.projekt === p.code).length;
-                return `
-                <div class="py-2.5 flex items-center justify-between gap-2">
-                    <div>
-                        <span class="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 font-mono text-xs font-bold">#${escapeHTML(p.code)}</span>
-                        ${p.desc ? `<span class="text-xs text-slate-600 ml-2">${escapeHTML(p.desc)}</span>` : ''}
-                        <span class="text-[11px] text-slate-400 ml-2">(${usage} ${usage === 1 ? 'Eintrag' : 'Einträge'})</span>
-                    </div>
-                    <button type="button" onclick="deleteProject('${escapeHTML(p.code)}')" class="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition">Entfernen</button>
-                </div>`;
-            }).join('');
-        }
-
-        function handleAddProject(e) {
-            e.preventDefault();
-            const code = (document.getElementById('new-project-code').value || '').trim().toUpperCase().slice(0, 10);
-            const desc = (document.getElementById('new-project-desc').value || '').trim();
-            if (!code) return;
-            if (projects.some(p => p.code === code)) {
-                showToast('Projekt-Kürzel existiert bereits.');
-                return;
-            }
-            projects.push({ code, desc });
-            document.getElementById('new-project-code').value = '';
-            document.getElementById('new-project-desc').value = '';
-            saveToStorage(true);
-            renderProjects();
-            showToast(`Projekt ${code} angelegt`);
-        }
-
-        function deleteProject(code) {
-            projects = projects.filter(p => p.code !== code);
-            saveToStorage(true);
-            renderProjects();
-            showToast(`Projekt ${code} entfernt`);
-        }
-
-        // --- DATEN MODAL & IMPORT / EXPORT ---
+        // --- DATEN MODAL & JSON / EXCEL-CSV EXPORT & IMPORT ---
         function openDataModal() {
             refreshOneDriveUI();
             refreshSecurityUI();
@@ -2715,16 +526,17 @@
             reader.onload = function (e) {
                 try {
                     const parsed = JSON.parse(e.target.result);
-                    if (!Array.isArray(parsed.entries)) {
-                        showToast('Ungültiges JSON-Format.');
+                    const normalized = normalizePayload(parsed);
+                    if (normalized.entries.length === 0 && normalized.projects.length === 0) {
+                        showToast('Keine gültigen Einträge in der JSON-Datei gefunden.');
                         return;
                     }
-                    entries = parsed.entries;
-                    projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+                    entries = normalized.entries;
+                    projects = normalized.projects;
                     saveToStorage(true);
                     rerenderAllViews();
                     closeDataModal();
-                    showToast(`${entries.length} Einträge importiert`);
+                    showToast(`${entries.length} Einträge vollständig importiert`);
                 } catch (err) {
                     console.error('Import-Fehler:', err);
                     showToast('Datei konnte nicht gelesen werden.');
